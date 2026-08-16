@@ -1,0 +1,2562 @@
+import telebot
+from telebot import types
+import sqlite3
+import time
+import random
+from datetime import datetime, timedelta
+import re
+import logging
+import json
+import os
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton, BotCommand
+
+# ========== НАСТРОЙКА ЛОГГИРОВАНИЯ ==========
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('bot.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# ========== КОНФИГУРАЦИЯ ==========
+class Config:
+    BOT_TOKEN = "8918094777:AAH6bDZoH8PcSnuj0STi8ycKu7zk8HSHFz8"  # ЗАМЕНИТЕ НА РАБОЧИЙ ТОКЕН
+    ADMIN_ID = 5356400377
+    
+    CHANNEL_LINK = "https://t.me/gmp_owner"
+    CHANNEL_ID = "@gmp_owner"
+    
+    SUPPORT_LINK = "@hjklgf1"
+    BOT_USERNAME = "@GMPakim_bot"
+    
+    RUB_TO_GMP = 1.5
+    STAR_TO_GMP_GIFT = 2.8
+    STAR_TO_GMP_BALANCE = 3.2
+    
+    CARD_NUMBER = "4100119356378762"
+    PHONE_NUMBER = "+7 908 652 31 55"
+    BANK_NAME = "Yoomoney "
+    RECIPIENT_NAME = "Иван Юрьевич Д."
+    
+    GIFT_RECIPIENT = "@hjklgf1"
+    
+    MIN_RUB_AMOUNT = 50
+    MAX_RUB_AMOUNT = 50000
+    MIN_STAR_AMOUNT = 50
+    MAX_STAR_AMOUNT = 5000
+    
+    DB_PATH = "bot_database.db"
+    
+    NAZVANIA = "GMP от owner"
+    
+    CASE_COOLDOWN_MINUTES = 1440
+    MIN_CASE_REWARD = 1
+    MAX_CASE_REWARD = 3
+    MIN_WITHDRAW_GMP = 20
+    MIN_REFERRALS_FOR_WITHDRAW = 10
+    REFERRAL_PERCENT = 10
+
+class Database:
+    def __init__(self, db_path):
+        self.db_path = db_path
+        self.init_db()
+        self.migrate_db()
+    
+    def init_db(self):
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        
+        # Таблица пользователей
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                last_name TEXT,
+                registered INTEGER DEFAULT 0,
+                balance REAL DEFAULT 0,
+                total_spent REAL DEFAULT 0,
+                orders_count INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                referrer_id INTEGER DEFAULT NULL,
+                referral_code TEXT,
+                referral_earnings REAL DEFAULT 0,
+                last_case_open TIMESTAMP DEFAULT NULL,
+                total_withdrawn REAL DEFAULT 0
+            )
+        ''')
+        
+        # Таблица заказов
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                type TEXT,
+                amount REAL,
+                gmp_amount REAL,
+                status TEXT DEFAULT 'pending',
+                screenshot_file_id TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                confirmed_at TIMESTAMP,
+                admin_message_id INTEGER,
+                user_message_id INTEGER
+            )
+        ''')
+        
+        # Таблица для бонусного баланса
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS bonus_balance (
+                user_id INTEGER PRIMARY KEY,
+                balance REAL DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # История бонусного баланса
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS bonus_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                amount REAL,
+                type TEXT,
+                description TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Заблокированные пользователи
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS banned_users (
+                user_id INTEGER PRIMARY KEY,
+                reason TEXT,
+                banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                banned_by INTEGER DEFAULT NULL
+            )
+        ''')
+        
+        # Рефералы
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS referrals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                referrer_id INTEGER,
+                referred_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Заявки на вывод
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS withdraw_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                amount REAL,
+                recipient TEXT,
+                status TEXT DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                processed_at TIMESTAMP,
+                admin_message_id INTEGER,
+                user_message_id INTEGER
+            )
+        ''')
+        
+        conn.commit()
+        conn.close()
+        logger.info("База данных инициализирована")
+    
+    def migrate_db(self):
+        """Добавляем новые колонки если их нет"""
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        
+        # Проверяем колонки в users
+        cur.execute("PRAGMA table_info(users)")
+        columns = [col[1] for col in cur.fetchall()]
+        
+        if 'total_withdrawn' not in columns:
+            cur.execute("ALTER TABLE users ADD COLUMN total_withdrawn REAL DEFAULT 0")
+            logger.info("Добавлена колонка total_withdrawn в users")
+        
+        if 'referral_earnings' not in columns:
+            cur.execute("ALTER TABLE users ADD COLUMN referral_earnings REAL DEFAULT 0")
+            logger.info("Добавлена колонка referral_earnings в users")
+        
+        if 'last_case_open' not in columns:
+            cur.execute("ALTER TABLE users ADD COLUMN last_case_open TIMESTAMP DEFAULT NULL")
+            logger.info("Добавлена колонка last_case_open в users")
+        
+        # Проверяем колонки в banned_users
+        cur.execute("PRAGMA table_info(banned_users)")
+        columns = [col[1] for col in cur.fetchall()]
+        
+        if 'banned_by' not in columns:
+            cur.execute("ALTER TABLE banned_users ADD COLUMN banned_by INTEGER DEFAULT NULL")
+            logger.info("Добавлена колонка banned_by в banned_users")
+        
+        conn.commit()
+        conn.close()
+    
+    # ========== МЕТОДЫ ДЛЯ ПОЛЬЗОВАТЕЛЕЙ ==========
+    
+    def get_user(self, user_id):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
+        user = cur.fetchone()
+        conn.close()
+        return user
+    
+    def register_user(self, user_id, username, first_name, last_name, referrer_id=None):
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        
+        referral_code = f"REF{user_id}{random.randint(1000, 9999)}"
+        
+        cur.execute('''
+            INSERT OR REPLACE INTO users 
+            (user_id, username, first_name, last_name, registered, last_activity, referrer_id, referral_code)
+            VALUES (?, ?, ?, ?, 1, CURRENT_TIMESTAMP, ?, ?)
+        ''', (user_id, username, first_name, last_name, referrer_id, referral_code))
+        
+        # Создаем запись в bonus_balance
+        cur.execute('''
+            INSERT OR IGNORE INTO bonus_balance (user_id, balance)
+            VALUES (?, 0)
+        ''', (user_id,))
+        
+        conn.commit()
+        conn.close()
+        logger.info(f"Новый пользователь зарегистрирован: {user_id}")
+    
+    def update_user_activity(self, user_id):
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        cur.execute('UPDATE users SET last_activity = CURRENT_TIMESTAMP WHERE user_id = ?', (user_id,))
+        conn.commit()
+        conn.close()
+    
+    def get_user_by_referral_code(self, referral_code):
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        cur.execute('SELECT user_id FROM users WHERE referral_code = ?', (referral_code,))
+        result = cur.fetchone()
+        conn.close()
+        return result[0] if result else None
+    
+    def is_user_banned(self, user_id):
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        cur.execute('SELECT * FROM banned_users WHERE user_id = ?', (user_id,))
+        banned = cur.fetchone()
+        conn.close()
+        return banned is not None
+    
+    def get_banned_users(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute('''
+            SELECT bu.*, u.username, u.first_name, u.last_name 
+            FROM banned_users bu
+            LEFT JOIN users u ON bu.user_id = u.user_id
+            ORDER BY bu.banned_at DESC
+        ''')
+        users = cur.fetchall()
+        conn.close()
+        return users
+    
+    def ban_user(self, user_id, reason, banned_by=None):
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        cur.execute('''
+            INSERT OR REPLACE INTO banned_users (user_id, reason, banned_by)
+            VALUES (?, ?, ?)
+        ''', (user_id, reason, banned_by))
+        conn.commit()
+        conn.close()
+        logger.info(f"Пользователь {user_id} забанен администратором {banned_by}")
+    
+    def unban_user(self, user_id):
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        cur.execute('DELETE FROM banned_users WHERE user_id = ?', (user_id,))
+        conn.commit()
+        conn.close()
+        logger.info(f"Пользователь {user_id} разбанен")
+    
+    # ========== МЕТОДЫ ДЛЯ РЕФЕРАЛОВ ==========
+    
+    def add_referral(self, referrer_id, referred_id):
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        cur.execute('INSERT INTO referrals (referrer_id, referred_id) VALUES (?, ?)', (referrer_id, referred_id))
+        conn.commit()
+        conn.close()
+    
+    def get_referrals_count(self, user_id):
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        cur.execute('SELECT COUNT(*) FROM referrals WHERE referrer_id = ?', (user_id,))
+        count = cur.fetchone()[0]
+        conn.close()
+        return count
+    
+    def get_referral_earnings(self, user_id):
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        cur.execute('SELECT referral_earnings FROM users WHERE user_id = ?', (user_id,))
+        result = cur.fetchone()
+        conn.close()
+        return result[0] if result else 0
+    
+    def add_referral_earnings(self, user_id, amount):
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        cur.execute('UPDATE users SET referral_earnings = referral_earnings + ? WHERE user_id = ?', (amount, user_id))
+        conn.commit()
+        conn.close()
+    
+    # ========== МЕТОДЫ ДЛЯ БОНУСНОГО БАЛАНСА ==========
+    
+    def get_bonus_balance(self, user_id):
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        cur.execute('SELECT balance FROM bonus_balance WHERE user_id = ?', (user_id,))
+        result = cur.fetchone()
+        conn.close()
+        return result[0] if result else 0
+    
+    def update_bonus_balance(self, user_id, amount, description=None):
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        cur.execute('''
+            UPDATE bonus_balance 
+            SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP 
+            WHERE user_id = ?
+        ''', (amount, user_id))
+        
+        # Добавляем в историю
+        cur.execute('''
+            INSERT INTO bonus_history (user_id, amount, type, description)
+            VALUES (?, ?, ?, ?)
+        ''', (user_id, amount, 'bonus', description or 'Пополнение бонусного баланса'))
+        
+        conn.commit()
+        conn.close()
+        logger.info(f"Бонусный баланс {user_id} изменен на {amount}")
+    
+    def get_bonus_history(self, user_id, limit=10):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute('''
+            SELECT * FROM bonus_history 
+            WHERE user_id = ? 
+            ORDER BY created_at DESC 
+            LIMIT ?
+        ''', (user_id, limit))
+        history = cur.fetchall()
+        conn.close()
+        return history
+    
+    def get_last_case_open(self, user_id):
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        cur.execute('SELECT last_case_open FROM users WHERE user_id = ?', (user_id,))
+        result = cur.fetchone()
+        conn.close()
+        return result[0] if result else None
+    
+    def update_last_case_open(self, user_id):
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        cur.execute('UPDATE users SET last_case_open = CURRENT_TIMESTAMP WHERE user_id = ?', (user_id,))
+        conn.commit()
+        conn.close()
+    
+    # ========== МЕТОДЫ ДЛЯ ЗАКАЗОВ ==========
+    
+    def create_order(self, user_id, order_type, amount, gmp_amount):
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        cur.execute('''
+            INSERT INTO orders (user_id, type, amount, gmp_amount)
+            VALUES (?, ?, ?, ?)
+        ''', (user_id, order_type, amount, gmp_amount))
+        order_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+        return order_id
+    
+    def get_order(self, order_id):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute('SELECT * FROM orders WHERE id = ?', (order_id,))
+        order = cur.fetchone()
+        conn.close()
+        return order
+    
+    def get_user_orders(self, user_id, limit=10):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute('''
+            SELECT * FROM orders 
+            WHERE user_id = ? 
+            ORDER BY created_at DESC 
+            LIMIT ?
+        ''', (user_id, limit))
+        orders = cur.fetchall()
+        conn.close()
+        return orders
+    
+    def get_user_total_gmp(self, user_id):
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        cur.execute('SELECT SUM(gmp_amount) FROM orders WHERE user_id = ? AND status = "confirmed"', (user_id,))
+        total = cur.fetchone()[0] or 0
+        conn.close()
+        return total
+    
+    def update_order_status(self, order_id, status, screenshot_file_id=None, admin_msg_id=None, user_msg_id=None):
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        
+        updates = []
+        params = []
+        
+        if screenshot_file_id is not None:
+            updates.append("screenshot_file_id = ?")
+            params.append(screenshot_file_id)
+        if admin_msg_id is not None:
+            updates.append("admin_message_id = ?")
+            params.append(admin_msg_id)
+        if user_msg_id is not None:
+            updates.append("user_message_id = ?")
+            params.append(user_msg_id)
+        
+        updates.append("status = ?")
+        params.append(status)
+        updates.append("updated_at = CURRENT_TIMESTAMP")
+        
+        if status == 'confirmed':
+            updates.append("confirmed_at = CURRENT_TIMESTAMP")
+        
+        params.append(order_id)
+        
+        query = f"UPDATE orders SET {', '.join(updates)} WHERE id = ?"
+        cur.execute(query, params)
+        
+        conn.commit()
+        conn.close()
+    
+    def get_pending_orders(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute('''
+            SELECT o.*, u.username, u.first_name, u.last_name 
+            FROM orders o 
+            LEFT JOIN users u ON o.user_id = u.user_id 
+            WHERE o.status = 'pending'
+            ORDER BY o.created_at ASC
+        ''')
+        orders = cur.fetchall()
+        conn.close()
+        return orders
+    
+    # ========== МЕТОДЫ ДЛЯ ВЫВОДА ==========
+    
+    def create_withdraw_request(self, user_id, amount, recipient):
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        cur.execute('''
+            INSERT INTO withdraw_requests (user_id, amount, recipient)
+            VALUES (?, ?, ?)
+        ''', (user_id, amount, recipient))
+        request_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+        return request_id
+    
+    def get_withdraw_request(self, request_id):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute('SELECT * FROM withdraw_requests WHERE id = ?', (request_id,))
+        request = cur.fetchone()
+        conn.close()
+        return request
+    
+    def get_pending_withdraws(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute('''
+            SELECT w.*, u.username, u.first_name, u.last_name 
+            FROM withdraw_requests w 
+            LEFT JOIN users u ON w.user_id = u.user_id 
+            WHERE w.status = 'pending'
+            ORDER BY w.created_at ASC
+        ''')
+        requests = cur.fetchall()
+        conn.close()
+        return requests
+    
+    def update_withdraw_status(self, request_id, status, admin_msg_id=None, user_msg_id=None):
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        
+        updates = []
+        params = []
+        
+        if admin_msg_id is not None:
+            updates.append("admin_message_id = ?")
+            params.append(admin_msg_id)
+        if user_msg_id is not None:
+            updates.append("user_message_id = ?")
+            params.append(user_msg_id)
+        
+        updates.append("status = ?")
+        params.append(status)
+        updates.append("processed_at = CURRENT_TIMESTAMP")
+        
+        params.append(request_id)
+        
+        query = f"UPDATE withdraw_requests SET {', '.join(updates)} WHERE id = ?"
+        cur.execute(query, params)
+        
+        conn.commit()
+        conn.close()
+    
+    def get_user_withdraw_history(self, user_id, limit=10):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute('''
+            SELECT * FROM withdraw_requests 
+            WHERE user_id = ? 
+            ORDER BY created_at DESC 
+            LIMIT ?
+        ''', (user_id, limit))
+        requests = cur.fetchall()
+        conn.close()
+        return requests
+    
+    def withdraw_bonus(self, user_id, amount):
+        """Списание с бонусного баланса"""
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        cur.execute('''
+            UPDATE bonus_balance 
+            SET balance = balance - ? 
+            WHERE user_id = ? AND balance >= ?
+        ''', (amount, user_id, amount))
+        updated = cur.rowcount
+        
+        if updated > 0:
+            cur.execute('''
+                INSERT INTO bonus_history (user_id, amount, type, description)
+                VALUES (?, ?, ?, ?)
+            ''', (user_id, -amount, 'withdraw', 'Вывод средств'))
+            
+            # Обновляем общую сумму вывода
+            cur.execute('''
+                UPDATE users SET total_withdrawn = total_withdrawn + ? 
+                WHERE user_id = ?
+            ''', (amount, user_id))
+        
+        conn.commit()
+        conn.close()
+        return updated > 0
+
+# ========== ИНИЦИАЛИЗАЦИЯ ==========
+db = Database(Config.DB_PATH)
+bot = telebot.TeleBot(Config.BOT_TOKEN)
+BOT_ID = None
+
+def get_bot_id():
+    global BOT_ID
+    if BOT_ID is None:
+        try:
+            BOT_ID = bot.get_me().id
+        except:
+            BOT_ID = 0
+    return BOT_ID
+
+# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+def check_subscription(user_id):
+    try:
+        member = bot.get_chat_member(Config.CHANNEL_ID, user_id)
+        return member.status in ['member', 'administrator', 'creator']
+    except:
+        return False
+
+def is_admin(user_id):
+    return user_id == Config.ADMIN_ID
+
+def is_bot_itself(user_id):
+    return user_id == get_bot_id()
+
+def format_date(date_str):
+    if not date_str:
+        return "Неизвестно"
+    try:
+        dt = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S')
+        return dt.strftime('%d.%m.%Y %H:%M')
+    except ValueError:
+        try:
+            dt = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S.%f')
+            return dt.strftime('%d.%m.%Y %H:%M')
+        except ValueError:
+            return date_str[:16] if len(date_str) > 16 else date_str
+
+def safe_edit_or_send(chat_id, message_id, text, reply_markup=None, parse_mode=None):
+    try:
+        bot.edit_message_text(text, chat_id, message_id, parse_mode=parse_mode, reply_markup=reply_markup)
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка редактирования: {e}")
+        try:
+            bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
+            return True
+        except Exception as e2:
+            logger.error(f"Ошибка отправки: {e2}")
+            return False
+
+def safe_delete_message(chat_id, message_id):
+    try:
+        if message_id:
+            bot.delete_message(chat_id, message_id)
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка удаления сообщения {message_id}: {e}")
+        return False
+
+def divider():
+    return "───────── ✧ ─────────"
+
+def format_time_remaining(seconds):
+    """Форматирует оставшееся время в формат: X ч. X м. X с."""
+    if seconds <= 0:
+        return "✅ Доступен сейчас!"
+    
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    seconds = int(seconds % 60)
+    
+    parts = []
+    if hours > 0:
+        parts.append(f"{hours} ч.")
+    if minutes > 0:
+        parts.append(f"{minutes} м.")
+    if seconds > 0:
+        parts.append(f"{seconds} с.")
+    
+    return " ".join(parts) if parts else "0 с."
+
+# ========== ФУНКЦИЯ ПОКАЗА БАЛАНСА (ВЫНЕСЕНА) ==========
+def show_balance(chat_id, message_id=None, user_id=None):
+    if user_id is None:
+        user_id = chat_id
+    
+    user = db.get_user(user_id)
+    if not user:
+        show_main_menu(chat_id, message_id)
+        return
+    
+    bonus_balance = db.get_bonus_balance(user_id)
+    referrals = db.get_referrals_count(user_id)
+    
+    text = (
+        f"🎁 <b>Баланс GMP: {int(bonus_balance)} GMP</b>\n\n"
+    )
+    
+    if referrals >= Config.MIN_REFERRALS_FOR_WITHDRAW and bonus_balance >= Config.MIN_WITHDRAW_GMP:
+        text += "✅ <b>Условия выполнены! Можете выводить</b>"
+    else:
+        if referrals < Config.MIN_REFERRALS_FOR_WITHDRAW:
+            text += f"❌ Нужно пригласить еще <b>{Config.MIN_REFERRALS_FOR_WITHDRAW - referrals}</b> друзей\n"
+        if bonus_balance < Config.MIN_WITHDRAW_GMP:
+            text += f"❌ Нужно накопить еще <b>{Config.MIN_WITHDRAW_GMP - int(bonus_balance)} GMP</b>"
+    
+    try:
+        if message_id:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=balance_keyboard())
+        else:
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=balance_keyboard())
+    except Exception as e:
+        logger.error(f"Ошибка balance: {e}")
+        bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=balance_keyboard())
+
+# ========== КЛАВИАТУРЫ ==========
+def main_menu_keyboard():
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    btn1 = types.InlineKeyboardButton("💸 Купить GMP", callback_data="buy_gmp")
+    btn2 = types.InlineKeyboardButton("📢 Live канал", callback_data="channel")
+    btn3 = types.InlineKeyboardButton("🆘 Support", callback_data="support")
+    btn4 = types.InlineKeyboardButton("👤 Профиль", callback_data="profile")
+    btn5 = types.InlineKeyboardButton("📊 История заказов", callback_data="history")
+    btn7 = types.InlineKeyboardButton("🔗 Реферальная ссылка", callback_data="referral")
+    keyboard.add(btn1, btn2)
+    keyboard.add(btn3, btn4)
+    keyboard.add(btn5, btn6)
+    return keyboard
+
+def admin_panel_keyboard():
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    btn1 = types.InlineKeyboardButton("📋 Заявки", callback_data="admin_orders")
+    btn2 = types.InlineKeyboardButton("💸 Заявки на вывод", callback_data="admin_withdraws")
+    btn3 = types.InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")
+    btn4 = types.InlineKeyboardButton("📢 Рассылка", callback_data="admin_broadcast")
+    btn5 = types.InlineKeyboardButton("🚫 Управление банами", callback_data="admin_bans")
+    keyboard.add(btn1, btn2)
+    keyboard.add(btn3, btn4)
+    keyboard.add(btn5)
+    return keyboard
+
+def payment_methods_keyboard():
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    btn1 = types.InlineKeyboardButton("⭐ Звёзды Telegram", callback_data="stars")
+    btn2 = types.InlineKeyboardButton("💳 Банковская карта", callback_data="rubles")
+    btn3 = types.InlineKeyboardButton("💲 Криптовалюта", callback_data="crypto")
+    btn4 = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_main")
+    keyboard.add(btn1, btn2)
+    keyboard.add(btn3, btn4)
+    return keyboard
+
+def stars_type_keyboard():
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    btn1 = types.InlineKeyboardButton("🎁 Отправить подарок", callback_data="gift_stars")
+    btn2 = types.InlineKeyboardButton("💰 Пополнить баланс", callback_data="balance_stars")
+    btn3 = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_payment")
+    keyboard.add(btn1, btn2)
+    keyboard.add(btn3)
+    return keyboard
+
+def gift_amount_keyboard():
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    for stars in [15, 25, 50, 100]:
+        gmp = int(stars * Config.STAR_TO_GMP_GIFT)
+        btn = types.InlineKeyboardButton(f"⭐ {stars}⭐ = {gmp} GMP", callback_data=f"gift_{stars}")
+        keyboard.add(btn)
+    btn_back = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_stars_type")
+    keyboard.add(btn_back)
+    return keyboard
+
+def gift_confirmation_keyboard():
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    btn1 = types.InlineKeyboardButton("✅ Я отправил подарок!", callback_data="confirm_gift")
+    btn2 = types.InlineKeyboardButton("❌ Отменить", callback_data="cancel_order")
+    keyboard.add(btn1, btn2)
+    return keyboard
+
+def confirm_rubles_keyboard(order_id):
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    btn1 = types.InlineKeyboardButton("✅ Я оплатил!", callback_data=f"confirm_rubles_{order_id}")
+    btn2 = types.InlineKeyboardButton("❌ Отмена", callback_data="cancel_order")
+    keyboard.add(btn1, btn2)
+    return keyboard
+
+def cancel_keyboard():
+    keyboard = types.InlineKeyboardMarkup(row_width=1)
+    btn1 = types.InlineKeyboardButton("❌ Отменить заказ", callback_data="cancel_order")
+    keyboard.add(btn1)
+    return keyboard
+
+def back_to_main_keyboard():
+    keyboard = types.InlineKeyboardMarkup(row_width=1)
+    btn1 = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_main")
+    keyboard.add(btn1)
+    return keyboard
+
+def support_keyboard():
+    keyboard = types.InlineKeyboardMarkup(row_width=1)
+    btn1 = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_main")
+    keyboard.add(btn1)
+    return keyboard
+
+def channel_keyboard():
+    keyboard = types.InlineKeyboardMarkup(row_width=1)
+    btn1 = types.InlineKeyboardButton("📢 Перейти в канал", url=Config.CHANNEL_LINK)
+    btn2 = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_main")
+    keyboard.add(btn1, btn2)
+    return keyboard
+
+def admin_confirm_keyboard(order_id):
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    btn1 = types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"admin_confirm_{order_id}")
+    btn2 = types.InlineKeyboardButton("❌ Отменить", callback_data=f"admin_cancel_{order_id}")
+    keyboard.add(btn1, btn2)
+    return keyboard
+
+def admin_withdraw_keyboard(request_id):
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    btn1 = types.InlineKeyboardButton("✅ Вывести", callback_data=f"admin_withdraw_approve_{request_id}")
+    btn2 = types.InlineKeyboardButton("❌ Отказать", callback_data=f"admin_withdraw_reject_{request_id}")
+    keyboard.add(btn1, btn2)
+    return keyboard
+
+def admin_orders_keyboard():
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    btn1 = types.InlineKeyboardButton("🔄 Обновить", callback_data="admin_orders")
+    btn2 = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_main")
+    keyboard.add(btn1, btn2)
+    return keyboard
+
+def admin_stats_keyboard():
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    btn1 = types.InlineKeyboardButton("🔄 Обновить", callback_data="admin_stats")
+    btn2 = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_main")
+    keyboard.add(btn1, btn2)
+    return keyboard
+
+def balance_stars_back_keyboard():
+    keyboard = types.InlineKeyboardMarkup(row_width=1)
+    btn1 = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_stars_type")
+    keyboard.add(btn1)
+    return keyboard
+
+def rubles_back_keyboard():
+    keyboard = types.InlineKeyboardMarkup(row_width=1)
+    btn1 = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_payment")
+    keyboard.add(btn1)
+    return keyboard
+
+def crypto_back_keyboard():
+    keyboard = types.InlineKeyboardMarkup(row_width=1)
+    btn1 = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_main")
+    keyboard.add(btn1)
+    return keyboard
+
+def case_keyboard():
+    keyboard = types.InlineKeyboardMarkup(row_width=1)
+    btn1 = types.InlineKeyboardButton("🫪 Панятна?", callback_data="what_is_case")
+    keyboard.add(btn1)
+    return keyboard
+
+def case_open_keyboard():
+    keyboard = types.InlineKeyboardMarkup(row_width=1)
+    btn1 = types.InlineKeyboardButton("Открыть кейс", callback_data="open_case")
+    btn2 = types.InlineKeyboardButton("🫪 Что это такое?", callback_data="what_is_case")
+    keyboard.add(btn1, btn2)
+    return keyboard
+
+def referral_keyboard():
+    keyboard = types.InlineKeyboardMarkup(row_width=1)
+    btn1 = types.InlineKeyboardButton("📤 Поделиться ссылкой", callback_data="share_referral")
+    btn2 = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_main")
+    keyboard.add(btn1, btn2)
+    return keyboard
+
+def balance_keyboard():
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    btn1 = types.InlineKeyboardButton("💸 Вывести GMP", callback_data="withdraw_gmp")
+    btn2 = types.InlineKeyboardButton("📊 История выводов", callback_data="withdraw_history")
+    btn3 = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_main")
+    keyboard.add(btn1, btn2)
+    keyboard.add(btn3)
+    return keyboard
+
+def withdraw_back_keyboard():
+    keyboard = types.InlineKeyboardMarkup(row_width=1)
+    btn1 = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_balance")
+    keyboard.add(btn1)
+    return keyboard
+
+def admin_bans_keyboard():
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    btn1 = types.InlineKeyboardButton("📋 Список банов", callback_data="admin_ban_list")
+    btn2 = types.InlineKeyboardButton("🔨 Забанить пользователя", callback_data="admin_ban_user")
+    btn3 = types.InlineKeyboardButton("🔓 Разбанить пользователя", callback_data="admin_unban_user")
+    btn4 = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_main")
+    keyboard.add(btn1, btn2)
+    keyboard.add(btn3, btn4)
+    return keyboard
+
+# ========== ФУНКЦИЯ ПОКАЗА ГЛАВНОГО МЕНЮ ==========
+def show_main_menu(chat_id, message_id=None):
+    user_id = chat_id
+    
+    if db.is_user_banned(user_id):
+        if message_id:
+            try:
+                bot.edit_message_text("🚫 Вы заблокированы в боте!", chat_id, message_id)
+            except:
+                bot.send_message(chat_id, "🚫 Вы заблокированы в боте!")
+        else:
+            bot.send_message(chat_id, "🚫 Вы заблокированы в боте!")
+        return
+    
+    db.update_user_activity(user_id)
+    
+    if not check_subscription(user_id):
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        btn1 = types.InlineKeyboardButton("🔗 Подписаться на канал", url=Config.CHANNEL_LINK)
+        btn2 = types.InlineKeyboardButton("✅ Проверить подписку", callback_data="check_sub")
+        markup.add(btn1, btn2)
+        
+        text = (
+            "🔒 <b>Для продолжения подпишись на канал</b>\n\n"
+            "Подпишитесь и нажмите кнопку проверки! ✅"
+        )
+        
+        if message_id:
+            try:
+                bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=markup)
+            except Exception as e:
+                logger.error(f"Ошибка редактирования сообщения подписки: {e}")
+                bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
+        else:
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
+        return
+    
+    user = db.get_user(user_id)
+    if not user or not user['registered']:
+        try:
+            chat = bot.get_chat(user_id)
+            username = chat.username
+            first_name = chat.first_name or "Пользователь"
+            last_name = chat.last_name
+        except:
+            username = None
+            first_name = "Пользователь"
+            last_name = None
+        
+        db.register_user(user_id, username, first_name, last_name)
+        user = db.get_user(user_id)
+    
+    first_name = user['first_name'] if user and user['first_name'] else "Пользователь"
+    
+    text = (
+        f"🫪 <b>Асалам маллекум, {first_name}!</b>\n\n"
+        "💰 <b>Граф GMP — твой надёжный поставщик GMP!</b>\n\n"
+        "⚡️ <b>Что я могу:</b>\n"
+        " • Продажа GMP по выгодному курсу\n"
+        " • Пополнение через звёзды Telegram\n"
+        " • Пополнение банковской картой\n\n"
+        "✨ <b>Выбери действие ниже:</b>"
+    )
+    
+    if is_admin(user_id):
+        markup = admin_panel_keyboard()
+    else:
+        markup = main_menu_keyboard()
+    
+    if message_id:
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=markup)
+        except Exception as e:
+            logger.error(f"Ошибка редактирования главного меню: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
+    else:
+        bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
+
+# ========== ОБРАБОТЧИКИ КОМАНД ==========
+@bot.message_handler(commands=['start'])
+def start_command(message):
+    user_id = message.from_user.id
+    
+    if db.is_user_banned(user_id):
+        bot.send_message(message.chat.id, "🚫 Вы заблокированы в боте!")
+        return
+    
+    if len(message.text.split()) > 1:
+        referral_code = message.text.split()[1]
+        referrer_id = db.get_user_by_referral_code(referral_code)
+        if referrer_id and referrer_id != user_id:
+            user = db.get_user(user_id)
+            if not user or not user['registered']:
+                try:
+                    chat = bot.get_chat(user_id)
+                    username = chat.username
+                    first_name = chat.first_name or "Пользователь"
+                    last_name = chat.last_name
+                except:
+                    username = None
+                    first_name = "Пользователь"
+                    last_name = None
+                
+                db.register_user(user_id, username, first_name, last_name, referrer_id)
+                db.add_referral(referrer_id, user_id)
+                
+                try:
+                    bot.send_message(
+                        referrer_id,
+                        f"Пользователь @{username or first_name} перешел по вашей ссылке!\n"
+                    )
+                except:
+                    pass
+                
+                bot.send_message(
+                    message.chat.id,
+                    "✅ Вы зарегистрированы по реферальной ссылке!\n"
+                    "Теперь вы можете пользоваться ботом.",
+                    parse_mode="HTML"
+                )
+                show_main_menu(message.chat.id)
+                return
+    
+    show_main_menu(message.chat.id)
+    
+    # Устанавливаем команды бота
+    try:
+        bot.set_my_commands([
+            BotCommand("start", "💸 Купить GMP")
+        ])
+    except Exception as e:
+        logger.error(f"Ошибка установки команд: {e}")
+
+# ========== КОЛБЭКИ ==========
+@bot.callback_query_handler(func=lambda call: True)
+def callback_handler(call):
+    user_id = call.from_user.id
+    message_id = call.message.message_id
+    chat_id = call.message.chat.id
+    
+    if is_bot_itself(user_id):
+        bot.answer_callback_query(call.id)
+        return
+    
+    if db.is_user_banned(user_id):
+        bot.answer_callback_query(call.id, "🚫 Вы заблокированы!", show_alert=True)
+        return
+    
+    db.update_user_activity(user_id)
+    
+    # ====== ПРОВЕРКА ПОДПИСКИ ======
+    if call.data == "check_sub":
+        if check_subscription(user_id):
+            show_main_menu(chat_id, message_id)
+        else:
+            bot.answer_callback_query(call.id, "❌ Вы не подписаны на канал!", show_alert=True)
+        return
+    
+    # ====== ГЛАВНАЯ НАВИГАЦИЯ ======
+    if call.data == "back_to_main":
+        show_main_menu(chat_id, message_id)
+        return
+    
+    if call.data == "back_to_payment":
+        text = "💳 <b>Выберите способ оплаты:</b>"
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=payment_methods_keyboard())
+        except Exception as e:
+            logger.error(f"Ошибка back_to_payment: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=payment_methods_keyboard())
+        return
+    
+    if call.data == "back_to_stars_type":
+        text = "⭐️ <b>Выберите тип пополнения звёздами:</b>"
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=stars_type_keyboard())
+        except Exception as e:
+            logger.error(f"Ошибка back_to_stars_type: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=stars_type_keyboard())
+        return
+    
+    if call.data == "back_to_balance":
+        show_balance(chat_id, message_id, user_id)
+        return
+    
+    # ====== КАНАЛ ======
+    if call.data == "channel":
+        text = (
+            "📢 <b>Наш канал</b>\n\n"
+            "Подписывайся, чтобы не пропустить:\n"
+            "▫️ Актуальные курсы GMP\n"
+            "▫️ Новые акции\n"
+            "▫️ Раздачи 24/7\n\n"
+            "🔽 Переходи по ссылке ниже!"
+        )
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=channel_keyboard())
+        except Exception as e:
+            logger.error(f"Ошибка channel: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=channel_keyboard())
+        return
+    
+    # ====== ПОДДЕРЖКА ======
+    if call.data == "support":
+        text = (
+            "🆘 <b>Служба поддержки</b>\n\n"
+            "Если у вас возникли вопросы или проблемы:\n"
+            "▫️ Напишите нам в личные сообщения\n"
+            "▫️ Ответим в течение 5-15 минут\n\n"
+            f"📩 <b>Контакты:</b>\n{Config.SUPPORT_LINK}"
+        )
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=support_keyboard())
+        except Exception as e:
+            logger.error(f"Ошибка support: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=support_keyboard())
+        return
+    
+    # ====== ПРОФИЛЬ ======
+    if call.data == "profile":
+        user = db.get_user(user_id)
+        if not user:
+            show_main_menu(chat_id, message_id)
+            return
+        
+        total_gmp = db.get_user_total_gmp(user_id)
+        created_at = format_date(user['created_at']) if user['created_at'] else "Неизвестно"
+        referrals = db.get_referrals_count(user_id)
+        referral_earnings = db.get_referral_earnings(user_id)
+        bonus_balance = db.get_bonus_balance(user_id)
+        total_withdrawn = user['total_withdrawn'] if user['total_withdrawn'] else 0
+        
+        text = (
+            f"👤 <code>{user_id}</code>\n\n"
+            f"📝 Имя: <b>{user['first_name'] or 'Не указано'}</b>\n"
+            f"📅 Регистрация: {created_at}\n\n"
+            f"───────── ✧ ─────────\n\n" 
+            f"🛒 Заказов: <b>{user['orders_count'] or 0}</b>\n"
+            f"💎 Куплено GMP: <b>{int(total_gmp)}</b>\n\n"
+            f"───────── ✧ ─────────\n\n"
+            f"🎁 Бонусный баланс: <b>{int(bonus_balance)} GMP</b>\n"
+            f"💸 Всего выведено: <b>{int(total_withdrawn)} GMP</b>\n"
+        )
+        
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=back_to_main_keyboard())
+        except Exception as e:
+            logger.error(f"Ошибка profile: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=back_to_main_keyboard())
+        return
+    
+    # ====== БАЛАНС ======
+    if call.data == "balance":
+        show_balance(chat_id, message_id, user_id)
+        return
+    
+    # ====== ВЫВОД GMP ======
+    if call.data == "withdraw_gmp":
+        user = db.get_user(user_id)
+        bonus_balance = db.get_bonus_balance(user_id)
+        referrals = db.get_referrals_count(user_id)
+        
+        # Проверяем условия вывода
+        if referrals < Config.MIN_REFERRALS_FOR_WITHDRAW:
+            bot.answer_callback_query(
+                call.id,
+                f"❌ Нужно пригласить {Config.MIN_REFERRALS_FOR_WITHDRAW} друзей! У вас {referrals}",
+                show_alert=True
+            )
+            return
+        
+        if bonus_balance < Config.MIN_WITHDRAW_GMP:
+            bot.answer_callback_query(
+                call.id,
+                f"❌ Минимальный вывод {Config.MIN_WITHDRAW_GMP} GMP! У вас {int(bonus_balance)} GMP",
+                show_alert=True
+            )
+            return
+        
+        msg = bot.send_message(
+            chat_id,
+            f"💸 <b>Вывод GMP</b>\n\n"
+            f"🎁 Ваш бонусный баланс: <b>{int(bonus_balance)} GMP</b>\n"
+            f"✏️ <b>Введите количество GMP для вывода:</b>",
+            parse_mode="HTML",
+            reply_markup=withdraw_back_keyboard()
+        )
+        try:
+            bot.edit_message_text("⏳ Ожидайте ввода суммы...", chat_id, message_id)
+        except:
+            pass
+        bot.register_next_step_handler(msg, handle_withdraw_amount)
+        return
+    
+    # ====== ИСТОРИЯ ВЫВОДОВ ======
+    if call.data == "withdraw_history":
+        requests = db.get_user_withdraw_history(user_id)
+        if not requests:
+            text = "📊 <b>История выводов пуста</b>"
+        else:
+            text = "📊 <b>ИСТОРИЯ ВЫВОДОВ</b>\n\n"
+            for req in requests[:5]:
+                status_emoji = "✅" if req['status'] == 'completed' else "⏳" if req['status'] == 'pending' else "❌"
+                status_text = "Выполнен" if req['status'] == 'completed' else "Ожидает" if req['status'] == 'pending' else "Отклонён"
+                text += (
+                    f"{status_emoji} <b>#{req['id']}</b>\n"
+                    f"   💰 {int(req['amount'])} GMP\n"
+                    f"   📱 Получатель: {req['recipient']}\n"
+                    f"   📅 {format_date(req['created_at'])}\n"
+                    f"   📌 {status_text}\n\n"
+                )
+        
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=balance_keyboard())
+        except Exception as e:
+            logger.error(f"Ошибка withdraw_history: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=balance_keyboard())
+        return
+    
+    # ====== ИСТОРИЯ ЗАКАЗОВ ======
+    if call.data == "history":
+        orders = db.get_user_orders(user_id)
+        if not orders:
+            text = "📊 <b>История заказов пуста</b>\n\nСделайте первый заказ прямо сейчас! 💰"
+        else:
+            text = "📊 <b>ИСТОРИЯ ПОКУПОК</b>\n\n"
+            for order in orders[:5]:
+                status_emoji = "✅" if order['status'] == "confirmed" else "⏳" if order['status'] == "pending" else "❌"
+                status_text = "Выполнен" if order['status'] == "confirmed" else "Ожидает" if order['status'] == "pending" else "Отменён"
+                text += (
+                    f"{status_emoji} <b>#{order['id']}</b>\n"
+                    f"   💎 {int(order['gmp_amount'])} GMP\n"
+                    f"   📅 {format_date(order['created_at'])}\n"
+                    f"   📌 {status_text}\n\n"
+                )
+        
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=back_to_main_keyboard())
+        except Exception as e:
+            logger.error(f"Ошибка history: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=back_to_main_keyboard())
+        return
+    
+    # ====== БЕСПЛАТНЫЙ КЕЙС ======
+    if call.data == "free_case":
+        last_open = db.get_last_case_open(user_id)
+        cooldown_minutes = Config.CASE_COOLDOWN_MINUTES
+        
+        text = (
+            "🫪 <b>Бесплатный кейс</b>\n\n"
+            "Это бесплатный кейс, где можешь на халяву получить GMP!\n\n"
+            f"⏰ Кейс доступен каждые <b>24 часа</b>\n"
+            "⬇️ Нажми кнопку и попробуй удачу!"
+        )
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=case_open_keyboard())
+        except Exception as e:
+            logger.error(f"Ошибка free_case: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=case_open_keyboard())
+        return
+    
+    # ====== ОТКРЫТИЕ КЕЙСА ======
+    if call.data == "open_case":
+        last_open = db.get_last_case_open(user_id)
+        cooldown_minutes = Config.CASE_COOLDOWN_MINUTES
+        
+        if last_open:
+            try:
+                last_open_dt = datetime.strptime(last_open, '%Y-%m-%d %H:%M:%S')
+                time_passed = datetime.now() - last_open_dt
+                seconds_passed = time_passed.total_seconds()
+                
+                if seconds_passed < cooldown_minutes * 60:
+                    remaining_seconds = int(cooldown_minutes * 60 - seconds_passed)
+                    time_str = format_time_remaining(remaining_seconds)
+                    bot.answer_callback_query(
+                        call.id,
+                        f"⏳ Кейс будет доступен через: {time_str}",
+                        show_alert=True
+                    )
+                    return
+            except:
+                pass
+        
+        reward = random.randint(Config.MIN_CASE_REWARD, Config.MAX_CASE_REWARD)
+        
+        # Начисляем на бонусный баланс
+        db.update_bonus_balance(user_id, reward, f"Кейс: +{reward} GMP")
+        db.update_last_case_open(user_id)
+        
+        # Реферальная система
+        user = db.get_user(user_id)
+        if user and user['referrer_id']:
+            referrer_id = user['referrer_id']
+            referral_earnings = reward * (Config.REFERRAL_PERCENT / 100)
+            db.update_bonus_balance(referrer_id, referral_earnings, f"Реферал: +{referral_earnings:.1f} GMP")
+            db.add_referral_earnings(referrer_id, referral_earnings)
+            
+            try:
+                bot.send_message(
+                    referrer_id,
+                    f"🎉 Ваш реферал открыл кейс!\n"
+                    f"💰 Вы получили {referral_earnings:.1f} GMP (10% от {reward} GMP)",
+                    parse_mode="HTML"
+                )
+            except:
+                pass
+        
+        text = (
+            f"🎉 <b>Поздравляю!</b>\n\n"
+            f"💰 <b>+{reward} GMP</b>\n"
+            "🔥 Продолжай в том же духе!"
+        )
+        
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=case_keyboard())
+        except Exception as e:
+            logger.error(f"Ошибка open_case: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=case_keyboard())
+        return
+    
+    # ====== ЧТО ТАКОЕ КЕЙС ======
+    if call.data == "what_is_case":
+        last_open = db.get_last_case_open(user_id)
+        cooldown_minutes = Config.CASE_COOLDOWN_MINUTES
+        time_status = "✅ Доступен сейчас!"
+        
+        if last_open:
+            try:
+                last_open_dt = datetime.strptime(last_open, '%Y-%m-%d %H:%M:%S')
+                time_passed = datetime.now() - last_open_dt
+                seconds_passed = time_passed.total_seconds()
+                
+                if seconds_passed < cooldown_minutes * 60:
+                    remaining_seconds = int(cooldown_minutes * 60 - seconds_passed)
+                    time_status = f"⏳ Доступен через: {format_time_remaining(remaining_seconds)}"
+            except:
+                pass
+        
+        text = (
+            "🫪 <b>Что это такое?</b>\n\n"
+            "Это бесплатный кейс, где можешь на халяву получить GMP.\n"
+            "GMP — это игровая валюта.\n\n"
+            f"⏰ Кейс доступен каждые <b>24 часа</b>\n"
+            "⬇️ Нажми кнопку, чтобы открыть!"
+        )
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=case_open_keyboard())
+        except Exception as e:
+            logger.error(f"Ошибка what_is_case: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=case_open_keyboard())
+        return
+
+    # ====== РЕФЕРАЛЬНАЯ ССЫЛКА ======
+    if call.data == "referral":
+        user = db.get_user(user_id)
+        if not user:
+            show_main_menu(chat_id, message_id)
+            return
+        
+        referral_code = user['referral_code'] if user['referral_code'] else f"REF{user_id}"
+        referral_link = f"https://t.me/{Config.BOT_USERNAME[1:]}?start={referral_code}"
+        referrals = db.get_referrals_count(user_id)
+        referral_earnings = db.get_referral_earnings(user_id)
+        
+        text = (
+            "🔗 <b>Реферальная программа</b>\n\n"
+            f"📤 Твоя реферальная ссылка:\n"
+            f"<code>{referral_link}</code>\n\n"
+            "📋 <b>Как это работает:</b>\n"
+            "1️⃣ Отправь ссылку другу\n"
+            "2️⃣ Друг переходит по ней и регистрируется\n"
+            f"3️⃣ Ты получаешь <b>{Config.REFERRAL_PERCENT}%</b> от его кейсов!\n\n"
+            f"👥 Приглашено: <b>{referrals}</b>\n"
+            f"💵 Заработано: <b>{int(referral_earnings)} GMP</b>\n"
+            f"🎯 Нужно для вывода: <b>{Config.MIN_REFERRALS_FOR_WITHDRAW}</b>\n\n"
+            "🔥 Приглашай друзей и зарабатывай!"
+        )
+        
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=referral_keyboard())
+        except Exception as e:
+            logger.error(f"Ошибка referral: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=referral_keyboard())
+        return
+    
+    # ====== ПОДЕЛИТЬСЯ РЕФЕРАЛЬНОЙ ССЫЛКОЙ ======
+    if call.data == "share_referral":
+        user = db.get_user(user_id)
+        if not user:
+            bot.answer_callback_query(call.id, "❌ Ошибка", show_alert=True)
+            return
+        
+        referral_code = user['referral_code'] if user['referral_code'] else f"REF{user_id}"
+        referral_link = f"https://t.me/{Config.BOT_USERNAME[1:]}?start={referral_code}"
+        
+        bot.send_message(
+            chat_id,
+            f"🔗 <b>Твоя реферальная ссылка:</b>\n\n"
+            f"<code>{referral_link}</code>\n\n"
+            "📋 <b>Инструкция:</b>\n"
+            "1️⃣ Скопируй ссылку\n"
+            "2️⃣ Отправь другу\n"
+            f"3️⃣ Получай <b>{Config.REFERRAL_PERCENT}%</b> от его открытых кейсов!\n\n"
+            "🔥 Чем больше друзей, тем больше заработок!",
+            parse_mode="HTML"
+        )
+        bot.answer_callback_query(call.id, "✅ Ссылка отправлена!")
+        return
+    
+    # ====== КУПИТЬ GMP ======
+    if call.data == "buy_gmp":
+        text = (
+            "💳 <b>Выберите способ оплаты</b>\n\n"
+            "⭐ <b>Звёзды Telegram</b> — моментальное пополнение\n"
+            "💳 <b>Банковская карта</b> — надёжный способ\n"
+            "💲 <b>Криптовалюта</b> — скоро будет доступна"
+        )
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=payment_methods_keyboard())
+        except Exception as e:
+            logger.error(f"Ошибка buy_gmp: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=payment_methods_keyboard())
+        return
+    
+    # ====== ЗВЕЗДЫ ======
+    if call.data == "stars":
+        text = (
+            "⭐️ <b>Пополнение через звёзды Telegram</b>\n\n"
+            "▫️ <b>Подарок:</b> отправь подарок \n"
+            "▫️ <b>На баланс:</b> пополни баланс напрямую\n\n"
+        )
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=stars_type_keyboard())
+        except Exception as e:
+            logger.error(f"Ошибка stars: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=stars_type_keyboard())
+        return
+    
+    # ====== ПОДАРОК ЗВЕЗДАМИ ======
+    if call.data == "gift_stars":
+        text = (
+            "🎁 <b>Отправка подарка звёздами</b>\n\n"
+            "📤 Отправь подарок на аккаунт:\n"
+            f" <code>{Config.GIFT_RECIPIENT}</code>\n\n"
+            "✅ После отправки нажми кнопку подтверждения\n"
+            "📸 Приложи скриншот для проверки\n\n"
+            "⬇️ <b>Выбери сумму подарка:</b>"
+        )
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=gift_amount_keyboard())
+        except Exception as e:
+            logger.error(f"Ошибка gift_stars: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=gift_amount_keyboard())
+        return
+    
+    # ====== БАЛАНС ЗВЕЗДАМИ ======
+    if call.data == "balance_stars":
+        text = (
+            "💰 <b>Пополнение баланса звёздами</b>\n\n"
+            "✏️ <b>Введите количество звёзд</b>\n"
+            "(только цифры)"
+        )
+        
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=balance_stars_back_keyboard())
+        except Exception as e:
+            logger.error(f"Ошибка balance_stars: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=balance_stars_back_keyboard())
+        
+        bot.register_next_step_handler(call.message, handle_balance_stars)
+        return
+    
+    # ====== ВЫБОР СУММЫ ПОДАРКА ======
+    if call.data.startswith("gift_"):
+        stars = int(call.data.split("_")[1])
+        gmp = int(stars * Config.STAR_TO_GMP_GIFT)
+        
+        order_id = db.create_order(user_id, "gift", stars, gmp)
+        
+        text = (
+            f"🎁 <b>Подарок {stars}⭐ → {gmp} GMP</b>\n\n"
+            "📤 <b>Инструкция:</b>\n"
+            f"1️⃣ Отправь подарок на <code>{Config.GIFT_RECIPIENT}</code>\n"
+            "2️⃣ В описании укажи любой текст\n"
+            "3️⃣ После отправки нажми «Я отправил подарок!»\n\n"
+            "📸 Приложи скриншот для проверки"
+        )
+        
+        msg = bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=gift_confirmation_keyboard())
+        db.update_order_status(order_id, status='pending', user_msg_id=msg.message_id)
+        return
+    
+    # ====== ПОДТВЕРЖДЕНИЕ ПОДАРКА ======
+    if call.data == "confirm_gift":
+        text = (
+            "📸 <b>Отправьте скриншот подарка</b>\n\n"
+            "✅ Убедитесь, что на скриншоте видно:\n"
+            "▫️ Сумму подарка\n"
+            "▫️ Получателя\n"
+            "▫️ Дату отправки\n\n"
+            "📤 Отправьте фото в этот чат"
+        )
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=cancel_keyboard())
+        except Exception as e:
+            logger.error(f"Ошибка confirm_gift: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=cancel_keyboard())
+        
+        bot.register_next_step_handler(call.message, handle_gift_screenshot)
+        return
+    
+    # ====== РУБЛИ ======
+    if call.data == "rubles":
+        text = (
+            "💳 <b>Пополнение банковской картой</b>\n\n"
+            "✏️ <b>Введите сумму в рублях</b>\n"
+            "(только цифры)"
+        )
+        
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=rubles_back_keyboard())
+        except Exception as e:
+            logger.error(f"Ошибка rubles: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=rubles_back_keyboard())
+        
+        bot.register_next_step_handler(call.message, handle_rubles_amount)
+        return
+    
+    # ====== КРИПТОВАЛЮТА ======
+    if call.data == "crypto":
+        text = (
+            "💲 <b>Криптовалюта</b>\n\n"
+            "🚧 <b>В разработке</b>\n\n"
+            "Скоро будут доступны:\n"
+            "▫️ USDT (TRC20)\n"
+            "▫️ BTC\n"
+            "▫️ ETH\n\n"
+            "Следите за обновлениями! 📢"
+        )
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=crypto_back_keyboard())
+        except Exception as e:
+            logger.error(f"Ошибка crypto: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=crypto_back_keyboard())
+        return
+    
+    # ====== АДМИН: УПРАВЛЕНИЕ БАНАМИ ======
+    if call.data == "admin_bans":
+        if not is_admin(user_id):
+            bot.answer_callback_query(call.id, "⛔ У вас нет прав администратора!", show_alert=True)
+            return
+        
+        text = "🚫 <b>Управление банами</b>\n\nВыберите действие:"
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=admin_bans_keyboard())
+        except Exception as e:
+            logger.error(f"Ошибка admin_bans: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=admin_bans_keyboard())
+        return
+    
+    # ====== АДМИН: СПИСОК БАНОВ ======
+    if call.data == "admin_ban_list":
+        if not is_admin(user_id):
+            bot.answer_callback_query(call.id, "⛔ У вас нет прав администратора!", show_alert=True)
+            return
+        
+        banned = db.get_banned_users()
+        if not banned:
+            text = "📋 <b>Заблокированных пользователей нет</b>"
+        else:
+            text = f"🚫 <b>Заблокированные пользователи ({len(banned)})</b>\n\n"
+            for ban in banned[:10]:
+                user_name = ban['username'] or ban['first_name'] or f"ID: {ban['user_id']}"
+                text += (
+                    f"👤 {user_name}\n"
+                    f"📅 {format_date(ban['banned_at'])}\n"
+                    f"📌 {ban['reason'] or 'Не указана'}\n"
+                    f"{divider()}\n"
+                )
+        
+        keyboard = types.InlineKeyboardMarkup(row_width=2)
+        btn1 = types.InlineKeyboardButton("🔄 Обновить", callback_data="admin_ban_list")
+        btn2 = types.InlineKeyboardButton("↩️ Назад", callback_data="admin_bans")
+        keyboard.add(btn1, btn2)
+        
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=keyboard)
+        except Exception as e:
+            logger.error(f"Ошибка admin_ban_list: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=keyboard)
+        return
+    
+    # ====== АДМИН: ЗАБАНИТЬ ======
+    if call.data == "admin_ban_user":
+        if not is_admin(user_id):
+            bot.answer_callback_query(call.id, "⛔ У вас нет прав администратора!", show_alert=True)
+            return
+        
+        msg = bot.send_message(
+            chat_id,
+            "🚫 <b>Забанить пользователя</b>\n\n"
+            "✏️ Введите ID пользователя или @username\n"
+            "Пример: 123456789 или @username",
+            parse_mode="HTML"
+        )
+        try:
+            bot.edit_message_text("⏳ Ожидайте ввода...", chat_id, message_id)
+        except:
+            pass
+        bot.register_next_step_handler(msg, handle_ban_user)
+        return
+    
+    # ====== АДМИН: РАЗБАНИТЬ ======
+    if call.data == "admin_unban_user":
+        if not is_admin(user_id):
+            bot.answer_callback_query(call.id, "⛔ У вас нет прав администратора!", show_alert=True)
+            return
+        
+        msg = bot.send_message(
+            chat_id,
+            "🔓 <b>Разбанить пользователя</b>\n\n"
+            "✏️ Введите ID пользователя для разбана\n"
+            "Пример: 123456789",
+            parse_mode="HTML"
+        )
+        try:
+            bot.edit_message_text("⏳ Ожидайте ввода...", chat_id, message_id)
+        except:
+            pass
+        bot.register_next_step_handler(msg, handle_unban_user)
+        return
+    
+    # ====== ОТМЕНА ЗАКАЗА ======
+    if call.data == "cancel_order":
+        try:
+            bot.delete_message(chat_id, message_id)
+        except:
+            pass
+        bot.send_message(chat_id, "❌ Заказ отменён.\n\nЕсли передумали — начните заново через /start")
+        show_main_menu(chat_id)
+        return
+    
+    # ====== ПОДТВЕРЖДЕНИЕ РУБЛЕЙ ======
+    if call.data.startswith("confirm_rubles_"):
+        order_id = int(call.data.split("_")[2])
+        order = db.get_order(order_id)
+        if not order:
+            bot.answer_callback_query(call.id, "❌ Заявка не найдена")
+            return
+        
+        text = (
+            "📸 <b>Отправьте скриншот оплаты</b>\n\n"
+            "✅ Убедитесь, что на скриншоте видно:\n"
+            f" Отправь звезды на <code>{Config.GIFT_RECIPIENT}</code>\n"
+            "▫️ Сумму перевода\n"
+            "▫️ Номер карты получателя\n"
+            "▫️ Дату и время\n\n"
+            "📤 Отправьте фото в этот чат"
+        )
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=cancel_keyboard())
+        except Exception as e:
+            logger.error(f"Ошибка confirm_rubles_: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=cancel_keyboard())
+        
+        bot.register_next_step_handler(call.message, handle_rubles_screenshot, order_id)
+        return
+    
+    # ========== АДМИН-ПАНЕЛЬ ==========
+    if call.data.startswith("admin_"):
+        if not is_admin(user_id):
+            bot.answer_callback_query(call.id, "⛔ У вас нет прав администратора!", show_alert=True)
+            return
+        
+        # ====== ЗАЯВКИ НА ПОПОЛНЕНИЕ ======
+        if call.data == "admin_orders":
+            pending_orders = db.get_pending_orders()
+            if not pending_orders:
+                text = "📋 <b>Новых заявок на пополнение нет</b>\n\nВсе заявки обработаны ✅"
+            else:
+                text = f"📋 <b>Заявки на пополнение ({len(pending_orders)})</b>\n\n"
+                for order in pending_orders[:10]:
+                    user_name = order['username'] or order['first_name'] or f"ID: {order['user_id']}"
+                    text += (
+                        f"{divider()}\n"
+                        f"#{order['id']} | {user_name}\n"
+                        f"💎 {int(order['gmp_amount'])} GMP\n"
+                        f"📅 {format_date(order['created_at'])}\n"
+                    )
+            
+            try:
+                bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=admin_orders_keyboard())
+            except Exception as e:
+                logger.error(f"Ошибка admin_orders: {e}")
+                bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=admin_orders_keyboard())
+            return
+        
+        # ====== ЗАЯВКИ НА ВЫВОД ======
+        if call.data == "admin_withdraws":
+            pending_withdraws = db.get_pending_withdraws()
+            if not pending_withdraws:
+                text = "💸 <b>Новых заявок на вывод нет</b>\n\nВсе заявки обработаны ✅"
+            else:
+                text = f"💸 <b>Заявки на вывод ({len(pending_withdraws)})</b>\n\n"
+                for req in pending_withdraws[:10]:
+                    user_name = req['username'] or req['first_name'] or f"ID: {req['user_id']}"
+                    text += (
+                        f"{divider()}\n"
+                        f"#{req['id']} | {user_name}\n"
+                        f"💰 {int(req['amount'])} GMP\n"
+                        f"📱 Получатель: {req['recipient']}\n"
+                        f"📅 {format_date(req['created_at'])}\n"
+                    )
+            
+            keyboard = types.InlineKeyboardMarkup(row_width=2)
+            btn1 = types.InlineKeyboardButton("🔄 Обновить", callback_data="admin_withdraws")
+            btn2 = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_main")
+            keyboard.add(btn1, btn2)
+            
+            try:
+                bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=keyboard)
+            except Exception as e:
+                logger.error(f"Ошибка admin_withdraws: {e}")
+                bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=keyboard)
+            return
+        
+        # ====== СТАТИСТИКА ======
+        if call.data == "admin_stats":
+            conn = sqlite3.connect(Config.DB_PATH)
+            cur = conn.cursor()
+            cur.execute('SELECT COUNT(*) FROM users')
+            total_users = cur.fetchone()[0]
+            cur.execute('SELECT COUNT(*) FROM orders')
+            total_orders = cur.fetchone()[0]
+            cur.execute('SELECT SUM(gmp_amount) FROM orders WHERE status = "confirmed"')
+            total_gmp = cur.fetchone()[0] or 0
+            cur.execute('SELECT COUNT(*) FROM orders WHERE status = "pending"')
+            pending_count = cur.fetchone()[0]
+            cur.execute('SELECT COUNT(*) FROM withdraw_requests WHERE status = "pending"')
+            pending_withdraws = cur.fetchone()[0]
+            cur.execute('SELECT SUM(amount) FROM withdraw_requests WHERE status = "completed"')
+            total_withdrawn = cur.fetchone()[0] or 0
+            cur.execute('SELECT SUM(balance) FROM bonus_balance')
+            total_bonus = cur.fetchone()[0] or 0
+            cur.execute('SELECT COUNT(*) FROM banned_users')
+            total_banned = cur.fetchone()[0] or 0
+            conn.close()
+            
+            text = (
+                "📊 <b>Статистика бота</b>\n\n"
+                f"👥 Пользователей: <b>{total_users}</b>\n"
+                f"📦 Всего заказов: <b>{total_orders}</b>\n"
+                f"⏳ В обработке: <b>{pending_count}</b>\n"
+                f"💎 Продано GMP: <b>{int(total_gmp)}</b>\n"
+                f"🎁 Бонусный баланс: <b>{int(total_bonus)} GMP</b>\n"
+                f"💸 Заявок на вывод: <b>{pending_withdraws}</b>\n"
+                f"💰 Выведено GMP: <b>{int(total_withdrawn)}</b>\n"
+                f"🚫 Заблокировано: <b>{total_banned}</b>\n"
+                f"{divider()}\n"
+                f"💰 Курс RUB: <b>{Config.RUB_TO_GMP}</b> GMP\n"
+                f"⭐ Курс подарка: <b>{Config.STAR_TO_GMP_GIFT}</b> GMP\n"
+                f"⭐ Курс баланса: <b>{Config.STAR_TO_GMP_BALANCE}</b> GMP"
+            )
+            
+            try:
+                bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=admin_stats_keyboard())
+            except Exception as e:
+                logger.error(f"Ошибка admin_stats: {e}")
+                bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=admin_stats_keyboard())
+            return
+        
+        # ====== РАССЫЛКА ======
+        if call.data == "admin_broadcast":
+            bot.send_message(
+                chat_id,
+                "📢 <b>СОЗДАНИЕ РАССЫЛКИ</b>\n\n"
+                "✏️ Введите текст для рассылки\n\n"
+                "📌 Текст можно форматировать:\n"
+                "▫️ <b>Жирный</b> — &lt;b&gt;текст&lt;/b&gt;\n"
+                "▫️ <i>Курсив</i> — &lt;i&gt;текст&lt;/i&gt;",
+                parse_mode="HTML"
+            )
+            try:
+                bot.edit_message_text("⏳ Ожидайте ввода текста...", chat_id, message_id)
+            except:
+                pass
+            bot.register_next_step_handler(call.message, handle_broadcast)
+            return
+    
+    # ========== АДМИН: ПОДТВЕРЖДЕНИЕ ПОПОЛНЕНИЯ ==========
+    if call.data.startswith("admin_confirm_"):
+        order_id = int(call.data.split("_")[2])
+        order = db.get_order(order_id)
+        
+        if order:
+            user = db.get_user(order['user_id'])
+            username = f"@{user['username']}" if user and user['username'] else f"ID: {order['user_id']}"
+            
+            db.update_order_status(order_id, "confirmed")
+            
+            conn = sqlite3.connect(Config.DB_PATH)
+            cur = conn.cursor()
+            cur.execute('UPDATE users SET orders_count = orders_count + 1 WHERE user_id = ?', (order['user_id'],))
+            conn.commit()
+            conn.close()
+            
+            admin_msg_id = order['admin_message_id'] if order['admin_message_id'] else None
+            if admin_msg_id:
+                safe_delete_message(Config.ADMIN_ID, admin_msg_id)
+            
+            user_msg_id = order['user_message_id'] if order['user_message_id'] else None
+            if user_msg_id:
+                safe_delete_message(order['user_id'], user_msg_id)
+            
+            try:
+                if not is_bot_itself(order['user_id']):
+                    text = (
+                        f"✅ <b>Заявка #{order_id} одобрена!</b>\n\n"
+                        f"💎 Куплено: <b>{int(order['gmp_amount'])} GMP</b>\n"
+                        f"📊 Статус: <b>Подтверждено</b>\n\n"
+                        "❤️ Спасибо за покупку!\n"
+                    )
+                    bot.send_message(order['user_id'], text, parse_mode="HTML")
+            except Exception as e:
+                logger.error(f"Не удалось уведомить пользователя {order['user_id']}: {e}")
+            
+            bot.answer_callback_query(call.id, "✅ Заявка подтверждена!")
+            
+            safe_edit_or_send(
+                call.message.chat.id,
+                call.message.message_id,
+                f"✅ <b>Заявка #{order_id} подтверждена</b>\n"
+                f"{divider()}\n"
+                f"💎 Продано: <b>{int(order['gmp_amount'])} GMP</b>\n"
+                f"👤 Покупатель: {username}",
+                parse_mode="HTML"
+            )
+        return
+    
+    if call.data.startswith("admin_cancel_"):
+        order_id = int(call.data.split("_")[2])
+        order = db.get_order(order_id)
+        
+        if order:
+            db.update_order_status(order_id, "cancelled")
+            
+            admin_msg_id = order['admin_message_id'] if order['admin_message_id'] else None
+            if admin_msg_id:
+                safe_delete_message(Config.ADMIN_ID, admin_msg_id)
+            
+            user_msg_id = order['user_message_id'] if order['user_message_id'] else None
+            if user_msg_id:
+                safe_delete_message(order['user_id'], user_msg_id)
+            
+            try:
+                if not is_bot_itself(order['user_id']):
+                    bot.send_message(
+                        order['user_id'],
+                        f"❌ <b>Заявка #{order_id} отклонена</b>\n\n"
+                        "Пожалуйста, проверьте правильность оплаты и попробуйте снова.\n"
+                        "При возникновении вопросов обратитесь в поддержку.",
+                        parse_mode="HTML"
+                    )
+            except Exception as e:
+                logger.error(f"Не удалось уведомить пользователя {order['user_id']}: {e}")
+            
+            bot.answer_callback_query(call.id, "❌ Заявка отклонена!")
+            
+            safe_edit_or_send(
+                call.message.chat.id,
+                call.message.message_id,
+                f"❌ <b>Заявка #{order_id} отклонена</b>",
+                parse_mode="HTML"
+            )
+        return
+    
+    # ========== АДМИН: ВЫВОД СРЕДСТВ ==========
+    if call.data.startswith("admin_withdraw_approve_"):
+        request_id = int(call.data.split("_")[3])
+        request = db.get_withdraw_request(request_id)
+        
+        if request:
+            if db.withdraw_bonus(request['user_id'], request['amount']):
+                db.update_withdraw_status(request_id, "completed")
+                
+                admin_msg_id = request['admin_message_id'] if request['admin_message_id'] else None
+                if admin_msg_id:
+                    safe_delete_message(Config.ADMIN_ID, admin_msg_id)
+                
+                try:
+                    if not is_bot_itself(request['user_id']):
+                        new_balance = db.get_bonus_balance(request['user_id'])
+                        text = (
+                            f"✅ <b>Вывод GMP выполнен!</b>\n\n"
+                            f"💰 Сумма: <b>{int(request['amount'])} GMP</b>\n"
+                            "💚 Средства отправлены на указанный аккаунт!"
+                        )
+                        bot.send_message(request['user_id'], text, parse_mode="HTML")
+                except Exception as e:
+                    logger.error(f"Не удалось уведомить пользователя {request['user_id']}: {e}")
+                
+                bot.answer_callback_query(call.id, "✅ Вывод выполнен!")
+                
+                user = db.get_user(request['user_id'])
+                username = f"@{user['username']}" if user and user['username'] else f"ID: {request['user_id']}"
+                
+                safe_edit_or_send(
+                    call.message.chat.id,
+                    call.message.message_id,
+                    f"✅ <b>Вывод #{request_id} выполнен</b>\n"
+                    f"{divider()}\n"
+                    f"💰 Сумма: <b>{int(request['amount'])} GMP</b>\n"
+                    f"👤 Пользователь: {username}\n"
+                    f"📱 Получатель: {request['recipient']}",
+                    parse_mode="HTML"
+                )
+            else:
+                bot.answer_callback_query(call.id, "❌ Недостаточно средств на бонусном балансе!", show_alert=True)
+        return
+    
+    if call.data.startswith("admin_withdraw_reject_"):
+        request_id = int(call.data.split("_")[3])
+        request = db.get_withdraw_request(request_id)
+        
+        if request:
+            db.update_withdraw_status(request_id, "rejected")
+            
+            admin_msg_id = request['admin_message_id'] if request['admin_message_id'] else None
+            if admin_msg_id:
+                safe_delete_message(Config.ADMIN_ID, admin_msg_id)
+            
+            try:
+                if not is_bot_itself(request['user_id']):
+                    bot.send_message(
+                        request['user_id'],
+                        f"❌ <b>Заявка на вывод #{request_id} отклонена</b>\n\n"
+                        "Пожалуйста, проверьте правильность реквизитов и попробуйте снова.\n"
+                        "При возникновении вопросов обратитесь в поддержку.",
+                        parse_mode="HTML"
+                    )
+            except Exception as e:
+                logger.error(f"Не удалось уведомить пользователя {request['user_id']}: {e}")
+            
+            bot.answer_callback_query(call.id, "❌ Вывод отклонен!")
+            
+            safe_edit_or_send(
+                call.message.chat.id,
+                call.message.message_id,
+                f"❌ <b>Заявка на вывод #{request_id} отклонена</b>",
+                parse_mode="HTML"
+            )
+        return
+    
+    bot.answer_callback_query(call.id)
+
+# ========== ОБРАБОТЧИКИ ВВОДА ==========
+
+# ====== ВЫВОД GMP - ВВОД СУММЫ ======
+def handle_withdraw_amount(message):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    if is_bot_itself(user_id):
+        return
+    
+    try:
+        amount = float(message.text.replace(',', '.'))
+        
+        if amount < Config.MIN_WITHDRAW_GMP:
+            bot.send_message(
+                chat_id,
+                f"❌ Минимальная сумма для вывода: <b>{Config.MIN_WITHDRAW_GMP} GMP</b>\n\n"
+                f"✏️ Введите корректную сумму",
+                parse_mode="HTML",
+                reply_markup=withdraw_back_keyboard()
+            )
+            bot.register_next_step_handler(message, handle_withdraw_amount)
+            return
+        
+        bonus_balance = db.get_bonus_balance(user_id)
+        
+        if amount > bonus_balance:
+            bot.send_message(
+                chat_id,
+                f"❌ Недостаточно средств!\n\n"
+                f"🎁 Ваш бонусный баланс: <b>{int(bonus_balance)} GMP</b>\n"
+                f"✏️ Введите сумму меньше или равную балансу",
+                parse_mode="HTML",
+                reply_markup=withdraw_back_keyboard()
+            )
+            bot.register_next_step_handler(message, handle_withdraw_amount)
+            return
+        
+        bot.send_message(
+            chat_id,
+            f"💰 Сумма: <b>{int(amount)} GMP</b>\n\n"
+            f"📱 <b>Введите ID или @username получателя:</b>\n"
+            "(Telegram ID или юзернейм, куда отправить GMP)",
+            parse_mode="HTML",
+            reply_markup=withdraw_back_keyboard()
+        )
+        bot.register_next_step_handler(message, handle_withdraw_recipient, amount)
+        
+    except ValueError:
+        bot.send_message(
+            chat_id,
+            "❌ Введите <b>число</b> (только цифры)\n\n"
+            "✏️ Например: 50",
+            parse_mode="HTML",
+            reply_markup=withdraw_back_keyboard()
+        )
+        bot.register_next_step_handler(message, handle_withdraw_amount)
+
+# ====== ВЫВОД GMP - ВВОД ПОЛУЧАТЕЛЯ ======
+def handle_withdraw_recipient(message, amount):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    if is_bot_itself(user_id):
+        return
+    
+    recipient = message.text.strip()
+    
+    if len(recipient) < 2:
+        bot.send_message(
+            chat_id,
+            "❌ Некорректный получатель!\n\n"
+            "📱 Введите ID или @username получателя",
+            parse_mode="HTML",
+            reply_markup=withdraw_back_keyboard()
+        )
+        bot.register_next_step_handler(message, handle_withdraw_recipient, amount)
+        return
+    
+    request_id = db.create_withdraw_request(user_id, amount, recipient)
+    
+    user = db.get_user(user_id)
+    username = f"@{user['username']}" if user and user['username'] else f"ID: {user_id}"
+    
+    if Config.ADMIN_ID:
+        try:
+            caption = (
+                f"💸 <b>Заявка на вывод GMP</b>\n"
+                f"{divider()}\n"
+                f"👤 От: {username}\n"
+                f"💰 Сумма: <b>{int(amount)} GMP</b>\n"
+                f"📱 Получатель: <b>{recipient}</b>\n"
+                f"📅 {datetime.now().strftime('%d.%m.%Y %H:%M')}\n"
+                f"{divider()}\n"
+                f"<code>перевод {int(amount)} GMP на {recipient}</code>"
+            )
+            
+            admin_msg = bot.send_message(
+                Config.ADMIN_ID,
+                caption,
+                parse_mode="HTML",
+                reply_markup=admin_withdraw_keyboard(request_id)
+            )
+            db.update_withdraw_status(request_id, "pending", admin_msg_id=admin_msg.message_id)
+        except Exception as e:
+            logger.error(f"Ошибка отправки админу: {e}")
+    
+    bot.send_message(
+        chat_id,
+        f"✅ <b>Заявка на вывод принята!</b>\n\n"
+        "⏳ Ожидайте обработки заявки администратором.\n"
+        "Обычно это занимает до 24 часов.\n\n"
+        "📌 Если у вас возникли вопросы, обратитесь в поддержку.",
+        parse_mode="HTML",
+        reply_markup=back_to_main_keyboard()
+    )
+
+# ====== БАЛАНС ЗВЕЗДАМИ ======
+def handle_balance_stars(message):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    if is_bot_itself(user_id):
+        return
+    
+    try:
+        stars = float(message.text.replace(',', '.'))
+        
+        if stars < Config.MIN_STAR_AMOUNT:
+            bot.send_message(
+                chat_id,
+                f"❌ Минимальная сумма: <b>{Config.MIN_STAR_AMOUNT}⭐</b>\n\n"
+                f"✏️ Введите корректное число",
+                parse_mode="HTML",
+                reply_markup=balance_stars_back_keyboard()
+            )
+            bot.register_next_step_handler(message, handle_balance_stars)
+            return
+        if stars > Config.MAX_STAR_AMOUNT:
+            bot.send_message(
+                chat_id,
+                f"❌ Максимальная сумма: <b>{Config.MAX_STAR_AMOUNT}⭐</b>\n\n"
+                f"✏️ Введите корректное число",
+                parse_mode="HTML",
+                reply_markup=balance_stars_back_keyboard()
+            )
+            bot.register_next_step_handler(message, handle_balance_stars)
+            return
+        
+        gmp = int(stars * Config.STAR_TO_GMP_BALANCE)
+        order_id = db.create_order(user_id, "balance_stars", stars, gmp)
+        
+        text = (
+            f"💰 <b>{stars}⭐ → {gmp} GMP</b>\n\n"
+            "📸 <b>Отправьте скриншот оплаты отправлять звезды @</b>\n\n"
+            "✅ Убедитесь, что на скриншоте видно:\n"
+            "▫️ Сумму списания звёзд\n"
+            "▫️ Дату и время\n\n"
+            "📤 Отправьте фото в этот чат"
+        )
+        msg = bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=cancel_keyboard())
+        db.update_order_status(order_id, status='pending', user_msg_id=msg.message_id)
+        bot.register_next_step_handler(message, handle_balance_stars_screenshot, order_id)
+        
+    except ValueError:
+        bot.send_message(
+            chat_id,
+            "❌ Введите <b>число</b> (только цифры)\n\n"
+            "✏️ Например: 100",
+            parse_mode="HTML",
+            reply_markup=balance_stars_back_keyboard()
+        )
+        bot.register_next_step_handler(message, handle_balance_stars)
+
+def handle_balance_stars_screenshot(message, order_id):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    if is_bot_itself(user_id):
+        return
+    
+    if not message.photo:
+        bot.send_message(
+            chat_id,
+            "❌ Пожалуйста, отправьте <b>фото</b> скриншота\n\n"
+            "📤 Отправьте изображение",
+            parse_mode="HTML",
+            reply_markup=cancel_keyboard()
+        )
+        bot.register_next_step_handler(message, handle_balance_stars_screenshot, order_id)
+        return
+    
+    order = db.get_order(order_id)
+    if not order:
+        bot.send_message(chat_id, "❌ Заявка не найдена")
+        return
+    
+    user = db.get_user(user_id)
+    username = f"@{user['username']}" if user and user['username'] else f"ID: {user_id}"
+    gmp_amount = int(order['gmp_amount'])
+    
+    caption = (
+        f"⭐ <b>Пополнение звёздами</b>\n"
+        f"{divider()}\n"
+        f"👤 {username}\n"
+        f"💎 {gmp_amount} GMP\n"
+        f"{divider()}\n"
+        f"<code>пополнение {gmp_amount} GMP @{user['username'] if user and user['username'] else ''}</code>"
+    )
+    
+    if Config.ADMIN_ID:
+        try:
+            admin_msg = bot.send_photo(
+                Config.ADMIN_ID,
+                message.photo[-1].file_id,
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=admin_confirm_keyboard(order_id)
+            )
+            db.update_order_status(order_id, status='pending', admin_msg_id=admin_msg.message_id)
+        except Exception as e:
+            logger.error(f"Ошибка отправки админу: {e}")
+    
+    bot.send_message(
+        chat_id,
+        "✅ <b>Скриншот отправлен!</b>\n\n"
+        "⏳ Ожидайте подтверждения администратора.\n"
+        "Обычно это занимает 5-15 минут.",
+        parse_mode="HTML",
+        reply_markup=back_to_main_keyboard()
+    )
+
+# ====== РУБЛИ ======
+def handle_rubles_amount(message):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    if is_bot_itself(user_id):
+        return
+    
+    try:
+        amount = float(message.text.replace(',', '.'))
+        
+        if amount < Config.MIN_RUB_AMOUNT:
+            bot.send_message(
+                chat_id,
+                f"❌ Минимальная сумма: <b>{Config.MIN_RUB_AMOUNT}₽</b>\n\n"
+                f"✏️ Введите корректную сумму",
+                parse_mode="HTML",
+                reply_markup=rubles_back_keyboard()
+            )
+            bot.register_next_step_handler(message, handle_rubles_amount)
+            return
+        if amount > Config.MAX_RUB_AMOUNT:
+            bot.send_message(
+                chat_id,
+                f"❌ Максимальная сумма: <b>{Config.MAX_RUB_AMOUNT}₽</b>\n\n"
+                f"✏️ Введите корректную сумму",
+                parse_mode="HTML",
+                reply_markup=rubles_back_keyboard()
+            )
+            bot.register_next_step_handler(message, handle_rubles_amount)
+            return
+        
+        gmp = int(amount * Config.RUB_TO_GMP)
+        order_id = db.create_order(user_id, "rubles", amount, gmp)
+        
+        text = (
+            f"💳 <b>{amount}₽ → {gmp} GMP</b>\n\n"
+            "🧾 <b>РЕКВИЗИТЫ ДЛЯ ОПЛАТЫ</b>\n"
+            f"💳 Номер карты: <code>{Config.CARD_NUMBER}</code>\n"
+            f"🏦 Банк: {Config.BANK_NAME}\n"
+            f"👤 Получатель: {Config.RECIPIENT_NAME}\n"
+            f"📱 Телефон: <code>{Config.PHONE_NUMBER}</code>\n\n"
+            "⚠️ <b>Внимание!</b>\n"
+            "▫️ При переводе с другого банка могут быть комиссии\n"
+            "▫️ Указывайте точную сумму в назначении платежа\n\n"
+            "✅ После оплаты нажмите кнопку ниже"
+        )
+        
+        msg = bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=confirm_rubles_keyboard(order_id))
+        db.update_order_status(order_id, status='pending', user_msg_id=msg.message_id)
+        
+    except ValueError:
+        bot.send_message(
+            chat_id,
+            "❌ Введите <b>число</b> (только цифры)\n\n"
+            "✏️ Например: 1000",
+            parse_mode="HTML",
+            reply_markup=rubles_back_keyboard()
+        )
+        bot.register_next_step_handler(message, handle_rubles_amount)
+
+def handle_rubles_screenshot(message, order_id):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    if is_bot_itself(user_id):
+        return
+    
+    if not message.photo:
+        bot.send_message(
+            chat_id,
+            "❌ Пожалуйста, отправьте <b>фото</b> скриншота оплаты\n\n"
+            "📤 Отправьте изображение",
+            parse_mode="HTML",
+            reply_markup=cancel_keyboard()
+        )
+        bot.register_next_step_handler(message, handle_rubles_screenshot, order_id)
+        return
+    
+    order = db.get_order(order_id)
+    if not order:
+        bot.send_message(chat_id, "❌ Заявка не найдена")
+        return
+    
+    user = db.get_user(user_id)
+    username = f"@{user['username']}" if user and user['username'] else f"ID: {user_id}"
+    gmp_amount = int(order['gmp_amount'])
+    
+    caption = (
+        f"💳 <b>Пополнение по карте</b>\n"
+        f"{divider()}\n"
+        f"👤 {username}\n"
+        f"💎 {gmp_amount} GMP\n"
+        f"💳 {order['amount']} ₽\n"
+        f"{divider()}\n"
+        f"<code>пополнение {gmp_amount} GMP @{user['username'] if user and user['username'] else ''}</code>"
+    )
+    
+    if Config.ADMIN_ID:
+        try:
+            admin_msg = bot.send_photo(
+                Config.ADMIN_ID,
+                message.photo[-1].file_id,
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=admin_confirm_keyboard(order_id)
+            )
+            db.update_order_status(order_id, status='pending', admin_msg_id=admin_msg.message_id)
+        except Exception as e:
+            logger.error(f"Ошибка отправки админу: {e}")
+    
+    bot.send_message(
+        chat_id,
+        "✅ <b>Скриншот отправлен!</b>\n\n"
+        "⏳ Ожидайте подтверждения администратора.\n"
+        "Обычно это занимает 5-15 минут.",
+        parse_mode="HTML",
+        reply_markup=back_to_main_keyboard()
+    )
+
+# ====== ПОДАРОК ======
+def handle_gift_screenshot(message):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    if is_bot_itself(user_id):
+        return
+    
+    if not message.photo:
+        bot.send_message(
+            chat_id,
+            "❌ Пожалуйста, отправьте <b>фото</b> скриншота подарка\n\n"
+            "📤 Отправьте изображение",
+            parse_mode="HTML",
+            reply_markup=cancel_keyboard()
+        )
+        bot.register_next_step_handler(message, handle_gift_screenshot)
+        return
+    
+    orders = db.get_user_orders(user_id, limit=5)
+    order = None
+    for o in orders:
+        if o['type'] == 'gift' and o['status'] == 'pending':
+            order = o
+            break
+    
+    if not order:
+        bot.send_message(chat_id, "❌ Активный заказ подарка не найден")
+        return
+    
+    order_id = order['id']
+    
+    user = db.get_user(user_id)
+    username = f"@{user['username']}" if user and user['username'] else f"ID: {user_id}"
+    gmp_amount = int(order['gmp_amount'])
+    
+    caption = (
+        f"🎁 <b>Пополнение подарком</b>\n"
+        f"{divider()}\n"
+        f"👤 {username}\n"
+        f"💎 {gmp_amount} GMP\n"
+        f"{divider()}\n"
+        f"<code>пополнение {gmp_amount} GMP @{user['username'] if user and user['username'] else ''}</code>"
+    )
+    
+    if Config.ADMIN_ID:
+        try:
+            admin_msg = bot.send_photo(
+                Config.ADMIN_ID,
+                message.photo[-1].file_id,
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=admin_confirm_keyboard(order_id)
+            )
+            db.update_order_status(order_id, status='pending', admin_msg_id=admin_msg.message_id)
+        except Exception as e:
+            logger.error(f"Ошибка отправки админу: {e}")
+    
+    bot.send_message(
+        chat_id,
+        "✅ <b>Скриншот отправлен!</b>\n\n"
+        "⏳ Ожидайте подтверждения администратора.\n"
+        "Обычно это занимает 5-15 минут.",
+        parse_mode="HTML",
+        reply_markup=back_to_main_keyboard()
+    )
+
+# ====== РАССЫЛКА ======
+def handle_broadcast(message):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    if is_bot_itself(user_id):
+        return
+    
+    if not is_admin(user_id):
+        return
+    
+    text = message.text
+    
+    conn = sqlite3.connect(Config.DB_PATH)
+    cur = conn.cursor()
+    cur.execute('SELECT user_id FROM users')
+    users = cur.fetchall()
+    conn.close()
+    
+    sent = 0
+    failed = 0
+    
+    status_msg = bot.send_message(chat_id, "📢 <b>Начинаю рассылку...</b>", parse_mode="HTML")
+    
+    for user in users:
+        try:
+            if not is_bot_itself(user[0]):
+                bot.send_message(user[0], text, parse_mode="HTML")
+                sent += 1
+                if sent % 10 == 0:
+                    try:
+                        bot.edit_message_text(
+                            f"📢 <b>Рассылка в процессе...</b>\n\n"
+                            f"✅ Отправлено: <b>{sent}</b>\n"
+                            f"❌ Ошибок: <b>{failed}</b>",
+                            chat_id,
+                            status_msg.message_id,
+                            parse_mode="HTML"
+                        )
+                    except:
+                        pass
+        except Exception as e:
+            failed += 1
+            logger.error(f"Ошибка рассылки {user[0]}: {e}")
+    
+    bot.edit_message_text(
+        f"📢 <b>Рассылка завершена!</b>\n\n"
+        f"✅ Отправлено: <b>{sent}</b>\n"
+        f"❌ Ошибок: <b>{failed}</b>",
+        chat_id,
+        status_msg.message_id,
+        parse_mode="HTML"
+    )
+
+# ====== АДМИН: ЗАБАНИТЬ ======
+def handle_ban_user(message):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    admin_id = user_id
+    
+    if not is_admin(admin_id):
+        return
+    
+    target = message.text.strip()
+    
+    # Пытаемся найти пользователя по ID или username
+    try:
+        if target.startswith('@'):
+            # По username
+            target_user = bot.get_chat(target)
+            target_id = target_user.id
+        else:
+            # По ID
+            target_id = int(target)
+    except:
+        bot.send_message(
+            chat_id,
+            "❌ Пользователь не найден!\n"
+            "Проверьте ID или @username и попробуйте снова.",
+            parse_mode="HTML"
+        )
+        return
+    
+    if target_id == admin_id:
+        bot.send_message(chat_id, "❌ Нельзя забанить самого себя!", parse_mode="HTML")
+        return
+    
+    if is_admin(target_id):
+        bot.send_message(chat_id, "❌ Нельзя забанить администратора!", parse_mode="HTML")
+        return
+    
+    # Запрашиваем причину
+    msg = bot.send_message(
+        chat_id,
+        f"🚫 <b>Бан пользователя</b>\n\n"
+        f"👤 ID: <code>{target_id}</code>\n\n"
+        f"✏️ Введите причину бана:\n"
+        "(или отправьте 'пропустить' для стандартной причины)",
+        parse_mode="HTML"
+    )
+    bot.register_next_step_handler(msg, handle_ban_reason, target_id)
+
+def handle_ban_reason(message, target_id):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    if not is_admin(user_id):
+        return
+    
+    reason = message.text.strip()
+    if reason.lower() == 'пропустить':
+        reason = "Нарушение правил"
+    
+    db.ban_user(target_id, reason, user_id)
+    
+    try:
+        bot.send_message(
+            target_id,
+            f"🚫 <b>Вы заблокированы в боте!</b>\n\n"
+            f"📌 Причина: {reason}\n\n"
+            "Если вы считаете, что это ошибка, обратитесь к администратору.",
+            parse_mode="HTML"
+        )
+    except:
+        pass
+    
+    bot.send_message(
+        chat_id,
+        f"✅ <b>Пользователь забанен!</b>\n\n"
+        f"👤 ID: <code>{target_id}</code>\n"
+        f"📌 Причина: {reason}",
+        parse_mode="HTML",
+        reply_markup=back_to_main_keyboard()
+    )
+
+# ====== АДМИН: РАЗБАНИТЬ ======
+def handle_unban_user(message):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    if not is_admin(user_id):
+        return
+    
+    try:
+        target_id = int(message.text.strip())
+    except:
+        bot.send_message(
+            chat_id,
+            "❌ Введите корректный ID пользователя!\n"
+            "Пример: 123456789",
+            parse_mode="HTML"
+        )
+        return
+    
+    if not db.is_user_banned(target_id):
+        bot.send_message(
+            chat_id,
+            f"❌ Пользователь <code>{target_id}</code> не забанен!",
+            parse_mode="HTML"
+        )
+        return
+    
+    db.unban_user(target_id)
+    
+    try:
+        bot.send_message(
+            target_id,
+            "🔓 <b>Вы разблокированы в боте!</b>\n\n"
+            "Теперь вы снова можете пользоваться ботом.",
+            parse_mode="HTML"
+        )
+    except:
+        pass
+    
+    bot.send_message(
+        chat_id,
+        f"✅ <b>Пользователь разбанен!</b>\n\n"
+        f"👤 ID: <code>{target_id}</code>",
+        parse_mode="HTML",
+        reply_markup=back_to_main_keyboard()
+    )
+
+# ========== ЗАПУСК БОТА ==========
+if __name__ == "__main__":
+    print("=" * 60)
+    print("🤖 BRAWL AKIM GMP BOT v3.0")
+    print("=" * 60)
+    print(f"📢 Канал: {Config.CHANNEL_LINK}")
+    print(f"👨‍💻 Админ ID: {Config.ADMIN_ID}")
+    print(f"💰 Курс RUB: 1₽ = {Config.RUB_TO_GMP} GMP")
+    print(f"⭐ Курс подарка: 1⭐ = {Config.STAR_TO_GMP_GIFT} GMP")
+    print(f"⭐ Курс баланса: 1⭐ = {Config.STAR_TO_GMP_BALANCE} GMP")
+    print(f"📤 Получатель подарков: {Config.GIFT_RECIPIENT}")
+    print(f"🎁 Кейс каждые: {Config.CASE_COOLDOWN_MINUTES} минут")
+    print(f"🎯 Кейс: {Config.MIN_CASE_REWARD}-{Config.MAX_CASE_REWARD} GMP")
+    print(f"👥 Рефералов для вывода: {Config.MIN_REFERRALS_FOR_WITHDRAW}")
+    print("=" * 60)
+    print("🔄 Бот запущен и готов к работе!")
+    print("=" * 60)
+    
+    try:
+        bot.polling(none_stop=True, interval=0)
+    except Exception as e:
+        logger.error(f"Критическая ошибка: {e}")
+        print(f"❌ Ошибка: {e}")
