@@ -30,7 +30,7 @@ class Config:
     CHANNEL_ID = "@gmp_owner"
     
     SUPPORT_LINK = "@hjklgf1"
-    BOT_USERNAME = "@GMPakim_bot"
+    BOT_USERNAME = @Sale_gmpbot"
     
     RUB_TO_GMP = 1.5
     STAR_TO_GMP_GIFT = 2.8
