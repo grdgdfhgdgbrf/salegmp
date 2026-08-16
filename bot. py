@@ -896,7 +896,8 @@ def show_main_menu(chat_id, message_id=None):
     
     db.update_user_activity(user_id)
     
-    if not check_subscription(user_id):
+    # --- ИСПРАВЛЕНИЕ: для администратора проверка подписки пропускается ---
+    if not is_admin(user_id) and not check_subscription(user_id):
         markup = types.InlineKeyboardMarkup(row_width=1)
         btn1 = types.InlineKeyboardButton("🔗 Подписаться на канал", url=Config.CHANNEL_LINK)
         btn2 = types.InlineKeyboardButton("✅ Проверить подписку", callback_data="check_sub")
@@ -917,6 +918,7 @@ def show_main_menu(chat_id, message_id=None):
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
         return
     
+    # Далее – показ меню (для админа или подписанного пользователя)
     user = db.get_user(user_id)
     if not user or not user['registered']:
         try:
@@ -1032,7 +1034,10 @@ def callback_handler(call):
     
     # ====== ПРОВЕРКА ПОДПИСКИ ======
     if call.data == "check_sub":
-        if check_subscription(user_id):
+        # --- ИСПРАВЛЕНИЕ: для администратора пропускаем проверку ---
+        if is_admin(user_id):
+            show_main_menu(chat_id, message_id)
+        elif check_subscription(user_id):
             show_main_menu(chat_id, message_id)
         else:
             bot.answer_callback_query(call.id, "❌ Вы не подписаны на канал!", show_alert=True)
