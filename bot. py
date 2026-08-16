@@ -32,6 +32,7 @@ class Config:
     SUPPORT_LINK = "@hjklgf1"
     BOT_USERNAME = "@Sale_gmpbot"
     
+    # Начальные значения курсов (будут перезаписаны из БД при старте)
     RUB_TO_GMP = 1.5
     STAR_TO_GMP_GIFT = 2.8
     STAR_TO_GMP_BALANCE = 3.2
@@ -64,6 +65,7 @@ class Database:
         self.db_path = db_path
         self.init_db()
         self.migrate_db()
+        self.init_settings()
     
     def init_db(self):
         conn = sqlite3.connect(self.db_path)
@@ -164,6 +166,14 @@ class Database:
             )
         ''')
         
+        # Таблица настроек (курсы и др.)
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        ''')
+        
         conn.commit()
         conn.close()
         logger.info("База данных инициализирована")
@@ -199,6 +209,44 @@ class Database:
         
         conn.commit()
         conn.close()
+    
+    def init_settings(self):
+        """Заполняет таблицу настроек значениями по умолчанию, если их нет"""
+        defaults = {
+            'RUB_TO_GMP': str(Config.RUB_TO_GMP),
+            'STAR_TO_GMP_GIFT': str(Config.STAR_TO_GMP_GIFT),
+            'STAR_TO_GMP_BALANCE': str(Config.STAR_TO_GMP_BALANCE)
+        }
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        for key, value in defaults.items():
+            cur.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', (key, value))
+        conn.commit()
+        conn.close()
+        logger.info("Настройки инициализированы")
+    
+    def get_setting(self, key):
+        """Получить значение настройки как строку"""
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        cur.execute('SELECT value FROM settings WHERE key = ?', (key,))
+        result = cur.fetchone()
+        conn.close()
+        return result[0] if result else None
+    
+    def get_setting_float(self, key):
+        """Получить значение настройки как float"""
+        val = self.get_setting(key)
+        return float(val) if val is not None else 0.0
+    
+    def set_setting(self, key, value):
+        """Установить значение настройки"""
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        cur.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', (key, str(value)))
+        conn.commit()
+        conn.close()
+        logger.info(f"Настройка {key} изменена на {value}")
     
     # ========== МЕТОДЫ ДЛЯ ПОЛЬЗОВАТЕЛЕЙ ==========
     
@@ -591,13 +639,6 @@ def get_bot_id():
     return BOT_ID
 
 # ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
-def check_subscription(user_id):
-    try:
-        member = bot.get_chat_member(Config.CHANNEL_ID, user_id)
-        return member.status in ['member', 'administrator', 'creator']
-    except:
-        return False
-
 def is_admin(user_id):
     return user_id == Config.ADMIN_ID
 
@@ -661,7 +702,7 @@ def format_time_remaining(seconds):
     
     return " ".join(parts) if parts else "0 с."
 
-# ========== ФУНКЦИЯ ПОКАЗА БАЛАНСА (ВЫНЕСЕНА) ==========
+# ========== ФУНКЦИЯ ПОКАЗА БАЛАНСА ==========
 def show_balance(chat_id, message_id=None, user_id=None):
     if user_id is None:
         user_id = chat_id
@@ -696,17 +737,25 @@ def show_balance(chat_id, message_id=None, user_id=None):
         bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=balance_keyboard())
 
 # ========== КЛАВИАТУРЫ ==========
-def main_menu_keyboard():
+def main_menu_keyboard(user_id=None):
     keyboard = types.InlineKeyboardMarkup(row_width=2)
     btn1 = types.InlineKeyboardButton("💸 Купить GMP", callback_data="buy_gmp")
     btn2 = types.InlineKeyboardButton("📢 Live канал", callback_data="channel")
     btn3 = types.InlineKeyboardButton("🆘 Support", callback_data="support")
     btn4 = types.InlineKeyboardButton("👤 Профиль", callback_data="profile")
     btn5 = types.InlineKeyboardButton("📊 История заказов", callback_data="history")
+    btn6 = types.InlineKeyboardButton("🎁 Бесплатный кейс", callback_data="free_case")
     btn7 = types.InlineKeyboardButton("🔗 Реферальная ссылка", callback_data="referral")
     keyboard.add(btn1, btn2)
     keyboard.add(btn3, btn4)
     keyboard.add(btn5, btn6)
+    keyboard.add(btn7)
+    
+    # Если пользователь админ, добавляем кнопку админ-панели
+    if user_id and is_admin(user_id):
+        btn_admin = types.InlineKeyboardButton("⚙️ Админ-панель", callback_data="admin_panel")
+        keyboard.add(btn_admin)
+    
     return keyboard
 
 def admin_panel_keyboard():
@@ -716,9 +765,12 @@ def admin_panel_keyboard():
     btn3 = types.InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")
     btn4 = types.InlineKeyboardButton("📢 Рассылка", callback_data="admin_broadcast")
     btn5 = types.InlineKeyboardButton("🚫 Управление банами", callback_data="admin_bans")
+    btn6 = types.InlineKeyboardButton("💱 Изменить курсы", callback_data="admin_change_rates")
+    btn7 = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_main")
     keyboard.add(btn1, btn2)
     keyboard.add(btn3, btn4)
-    keyboard.add(btn5)
+    keyboard.add(btn5, btn6)
+    keyboard.add(btn7)
     return keyboard
 
 def payment_methods_keyboard():
@@ -742,8 +794,9 @@ def stars_type_keyboard():
 
 def gift_amount_keyboard():
     keyboard = types.InlineKeyboardMarkup(row_width=2)
+    star_to_gmp_gift = db.get_setting_float('STAR_TO_GMP_GIFT')
     for stars in [15, 25, 50, 100]:
-        gmp = int(stars * Config.STAR_TO_GMP_GIFT)
+        gmp = int(stars * star_to_gmp_gift)
         btn = types.InlineKeyboardButton(f"⭐ {stars}⭐ = {gmp} GMP", callback_data=f"gift_{stars}")
         keyboard.add(btn)
     btn_back = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_stars_type")
@@ -896,29 +949,7 @@ def show_main_menu(chat_id, message_id=None):
     
     db.update_user_activity(user_id)
     
-    # --- ИСПРАВЛЕНИЕ: для администратора проверка подписки пропускается ---
-    if not is_admin(user_id) and not check_subscription(user_id):
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        btn1 = types.InlineKeyboardButton("🔗 Подписаться на канал", url=Config.CHANNEL_LINK)
-        btn2 = types.InlineKeyboardButton("✅ Проверить подписку", callback_data="check_sub")
-        markup.add(btn1, btn2)
-        
-        text = (
-            "🔒 <b>Для продолжения подпишись на канал</b>\n\n"
-            "Подпишитесь и нажмите кнопку проверки! ✅"
-        )
-        
-        if message_id:
-            try:
-                bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=markup)
-            except Exception as e:
-                logger.error(f"Ошибка редактирования сообщения подписки: {e}")
-                bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
-        else:
-            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
-        return
-    
-    # Далее – показ меню (для админа или подписанного пользователя)
+    # Регистрация, если ещё не зарегистрирован
     user = db.get_user(user_id)
     if not user or not user['registered']:
         try:
@@ -946,10 +977,8 @@ def show_main_menu(chat_id, message_id=None):
         "✨ <b>Выбери действие ниже:</b>"
     )
     
-    if is_admin(user_id):
-        markup = admin_panel_keyboard()
-    else:
-        markup = main_menu_keyboard()
+    # Всегда показываем обычное меню, админ-панель доступна через кнопку
+    markup = main_menu_keyboard(user_id)
     
     if message_id:
         try:
@@ -1031,17 +1060,6 @@ def callback_handler(call):
         return
     
     db.update_user_activity(user_id)
-    
-    # ====== ПРОВЕРКА ПОДПИСКИ ======
-    if call.data == "check_sub":
-        # --- ИСПРАВЛЕНИЕ: для администратора пропускаем проверку ---
-        if is_admin(user_id):
-            show_main_menu(chat_id, message_id)
-        elif check_subscription(user_id):
-            show_main_menu(chat_id, message_id)
-        else:
-            bot.answer_callback_query(call.id, "❌ Вы не подписаны на канал!", show_alert=True)
-        return
     
     # ====== ГЛАВНАЯ НАВИГАЦИЯ ======
     if call.data == "back_to_main":
@@ -1147,7 +1165,6 @@ def callback_handler(call):
         bonus_balance = db.get_bonus_balance(user_id)
         referrals = db.get_referrals_count(user_id)
         
-        # Проверяем условия вывода
         if referrals < Config.MIN_REFERRALS_FOR_WITHDRAW:
             bot.answer_callback_query(
                 call.id,
@@ -1271,11 +1288,9 @@ def callback_handler(call):
         
         reward = random.randint(Config.MIN_CASE_REWARD, Config.MAX_CASE_REWARD)
         
-        # Начисляем на бонусный баланс
         db.update_bonus_balance(user_id, reward, f"Кейс: +{reward} GMP")
         db.update_last_case_open(user_id)
         
-        # Реферальная система
         user = db.get_user(user_id)
         if user and user['referrer_id']:
             referrer_id = user['referrer_id']
@@ -1461,7 +1476,8 @@ def callback_handler(call):
     # ====== ВЫБОР СУММЫ ПОДАРКА ======
     if call.data.startswith("gift_"):
         stars = int(call.data.split("_")[1])
-        gmp = int(stars * Config.STAR_TO_GMP_GIFT)
+        star_to_gmp_gift = db.get_setting_float('STAR_TO_GMP_GIFT')
+        gmp = int(stars * star_to_gmp_gift)
         
         order_id = db.create_order(user_id, "gift", stars, gmp)
         
@@ -1530,6 +1546,19 @@ def callback_handler(call):
         except Exception as e:
             logger.error(f"Ошибка crypto: {e}")
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=crypto_back_keyboard())
+        return
+    
+    # ====== АДМИН: ВХОД В АДМИН-ПАНЕЛЬ ======
+    if call.data == "admin_panel":
+        if not is_admin(user_id):
+            bot.answer_callback_query(call.id, "⛔ У вас нет прав!", show_alert=True)
+            return
+        text = "⚙️ <b>Админ-панель</b>\n\nВыберите раздел:"
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=admin_panel_keyboard())
+        except Exception as e:
+            logger.error(f"Ошибка admin_panel: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=admin_panel_keyboard())
         return
     
     # ====== АДМИН: УПРАВЛЕНИЕ БАНАМИ ======
@@ -1618,6 +1647,28 @@ def callback_handler(call):
         bot.register_next_step_handler(msg, handle_unban_user)
         return
     
+    # ====== АДМИН: ИЗМЕНЕНИЕ КУРСОВ ======
+    if call.data == "admin_change_rates":
+        if not is_admin(user_id):
+            bot.answer_callback_query(call.id, "⛔ У вас нет прав!", show_alert=True)
+            return
+        
+        # Начинаем цепочку изменения курсов
+        msg = bot.send_message(
+            chat_id,
+            "💱 <b>Изменение курсов</b>\n\n"
+            "Введите новый курс <b>RUB → GMP</b> (например, 1.5):\n"
+            "Текущий курс: " + str(db.get_setting_float('RUB_TO_GMP')),
+            parse_mode="HTML",
+            reply_markup=back_to_main_keyboard()
+        )
+        try:
+            bot.edit_message_text("⏳ Ожидайте ввода...", chat_id, message_id)
+        except:
+            pass
+        bot.register_next_step_handler(msg, handle_change_rub_rate)
+        return
+    
     # ====== ОТМЕНА ЗАКАЗА ======
     if call.data == "cancel_order":
         try:
@@ -1639,7 +1690,7 @@ def callback_handler(call):
         text = (
             "📸 <b>Отправьте скриншот оплаты</b>\n\n"
             "✅ Убедитесь, что на скриншоте видно:\n"
-            f" Отправь звезды на <code>{Config.GIFT_RECIPIENT}</code>\n"
+            f" Отправь звёзды на <code>{Config.GIFT_RECIPIENT}</code>\n"
             "▫️ Сумму перевода\n"
             "▫️ Номер карты получателя\n"
             "▫️ Дату и время\n\n"
@@ -1654,7 +1705,7 @@ def callback_handler(call):
         bot.register_next_step_handler(call.message, handle_rubles_screenshot, order_id)
         return
     
-    # ========== АДМИН-ПАНЕЛЬ ==========
+    # ========== АДМИН-ПАНЕЛЬ: ОСТАЛЬНЫЕ РАЗДЕЛЫ ==========
     if call.data.startswith("admin_"):
         if not is_admin(user_id):
             bot.answer_callback_query(call.id, "⛔ У вас нет прав администратора!", show_alert=True)
@@ -1734,6 +1785,10 @@ def callback_handler(call):
             total_banned = cur.fetchone()[0] or 0
             conn.close()
             
+            rub_rate = db.get_setting_float('RUB_TO_GMP')
+            star_gift = db.get_setting_float('STAR_TO_GMP_GIFT')
+            star_balance = db.get_setting_float('STAR_TO_GMP_BALANCE')
+            
             text = (
                 "📊 <b>Статистика бота</b>\n\n"
                 f"👥 Пользователей: <b>{total_users}</b>\n"
@@ -1745,9 +1800,9 @@ def callback_handler(call):
                 f"💰 Выведено GMP: <b>{int(total_withdrawn)}</b>\n"
                 f"🚫 Заблокировано: <b>{total_banned}</b>\n"
                 f"{divider()}\n"
-                f"💰 Курс RUB: <b>{Config.RUB_TO_GMP}</b> GMP\n"
-                f"⭐ Курс подарка: <b>{Config.STAR_TO_GMP_GIFT}</b> GMP\n"
-                f"⭐ Курс баланса: <b>{Config.STAR_TO_GMP_BALANCE}</b> GMP"
+                f"💰 Курс RUB: <b>{rub_rate}</b> GMP\n"
+                f"⭐ Курс подарка: <b>{star_gift}</b> GMP\n"
+                f"⭐ Курс баланса: <b>{star_balance}</b> GMP"
             )
             
             try:
@@ -1943,6 +1998,103 @@ def callback_handler(call):
 
 # ========== ОБРАБОТЧИКИ ВВОДА ==========
 
+# ====== ИЗМЕНЕНИЕ КУРСА RUB ======
+def handle_change_rub_rate(message):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    if not is_admin(user_id):
+        return
+    
+    try:
+        new_rate = float(message.text.replace(',', '.'))
+        if new_rate <= 0:
+            raise ValueError
+    except:
+        bot.send_message(
+            chat_id,
+            "❌ Некорректное значение. Введите положительное число.\n"
+            "Попробуйте снова или нажмите «Назад».",
+            parse_mode="HTML",
+            reply_markup=back_to_main_keyboard()
+        )
+        bot.register_next_step_handler(message, handle_change_rub_rate)
+        return
+    
+    db.set_setting('RUB_TO_GMP', new_rate)
+    bot.send_message(
+        chat_id,
+        f"✅ Курс RUB → GMP установлен: <b>{new_rate}</b>\n\n"
+        "Теперь введите новый курс <b>⭐ подарок → GMP</b> (текущий: " + str(db.get_setting_float('STAR_TO_GMP_GIFT')) + "):",
+        parse_mode="HTML",
+        reply_markup=back_to_main_keyboard()
+    )
+    bot.register_next_step_handler(message, handle_change_gift_rate)
+
+def handle_change_gift_rate(message):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    if not is_admin(user_id):
+        return
+    
+    try:
+        new_rate = float(message.text.replace(',', '.'))
+        if new_rate <= 0:
+            raise ValueError
+    except:
+        bot.send_message(
+            chat_id,
+            "❌ Некорректное значение. Введите положительное число.\n"
+            "Попробуйте снова или нажмите «Назад».",
+            parse_mode="HTML",
+            reply_markup=back_to_main_keyboard()
+        )
+        bot.register_next_step_handler(message, handle_change_gift_rate)
+        return
+    
+    db.set_setting('STAR_TO_GMP_GIFT', new_rate)
+    bot.send_message(
+        chat_id,
+        f"✅ Курс подарка → GMP установлен: <b>{new_rate}</b>\n\n"
+        "Теперь введите новый курс <b>⭐ баланс → GMP</b> (текущий: " + str(db.get_setting_float('STAR_TO_GMP_BALANCE')) + "):",
+        parse_mode="HTML",
+        reply_markup=back_to_main_keyboard()
+    )
+    bot.register_next_step_handler(message, handle_change_balance_rate)
+
+def handle_change_balance_rate(message):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    if not is_admin(user_id):
+        return
+    
+    try:
+        new_rate = float(message.text.replace(',', '.'))
+        if new_rate <= 0:
+            raise ValueError
+    except:
+        bot.send_message(
+            chat_id,
+            "❌ Некорректное значение. Введите положительное число.\n"
+            "Попробуйте снова или нажмите «Назад».",
+            parse_mode="HTML",
+            reply_markup=back_to_main_keyboard()
+        )
+        bot.register_next_step_handler(message, handle_change_balance_rate)
+        return
+    
+    db.set_setting('STAR_TO_GMP_BALANCE', new_rate)
+    bot.send_message(
+        chat_id,
+        f"✅ Курс баланса → GMP установлен: <b>{new_rate}</b>\n\n"
+        "Все курсы успешно обновлены! ✅",
+        parse_mode="HTML",
+        reply_markup=back_to_main_keyboard()
+    )
+    show_main_menu(chat_id)
+
 # ====== ВЫВОД GMP - ВВОД СУММЫ ======
 def handle_withdraw_amount(message):
     user_id = message.from_user.id
@@ -2090,12 +2242,13 @@ def handle_balance_stars(message):
             bot.register_next_step_handler(message, handle_balance_stars)
             return
         
-        gmp = int(stars * Config.STAR_TO_GMP_BALANCE)
+        star_to_gmp_balance = db.get_setting_float('STAR_TO_GMP_BALANCE')
+        gmp = int(stars * star_to_gmp_balance)
         order_id = db.create_order(user_id, "balance_stars", stars, gmp)
         
         text = (
             f"💰 <b>{stars}⭐ → {gmp} GMP</b>\n\n"
-            "📸 <b>Отправьте скриншот оплаты отправлять звезды @</b>\n\n"
+            "📸 <b>Отправьте скриншот оплаты отправлять звёзды @</b>\n\n"
             "✅ Убедитесь, что на скриншоте видно:\n"
             "▫️ Сумму списания звёзд\n"
             "▫️ Дату и время\n\n"
@@ -2205,7 +2358,8 @@ def handle_rubles_amount(message):
             bot.register_next_step_handler(message, handle_rubles_amount)
             return
         
-        gmp = int(amount * Config.RUB_TO_GMP)
+        rub_to_gmp = db.get_setting_float('RUB_TO_GMP')
+        gmp = int(amount * rub_to_gmp)
         order_id = db.create_order(user_id, "rubles", amount, gmp)
         
         text = (
@@ -2425,14 +2579,11 @@ def handle_ban_user(message):
     
     target = message.text.strip()
     
-    # Пытаемся найти пользователя по ID или username
     try:
         if target.startswith('@'):
-            # По username
             target_user = bot.get_chat(target)
             target_id = target_user.id
         else:
-            # По ID
             target_id = int(target)
     except:
         bot.send_message(
@@ -2451,7 +2602,6 @@ def handle_ban_user(message):
         bot.send_message(chat_id, "❌ Нельзя забанить администратора!", parse_mode="HTML")
         return
     
-    # Запрашиваем причину
     msg = bot.send_message(
         chat_id,
         f"🚫 <b>Бан пользователя</b>\n\n"
@@ -2549,9 +2699,9 @@ if __name__ == "__main__":
     print("=" * 60)
     print(f"📢 Канал: {Config.CHANNEL_LINK}")
     print(f"👨‍💻 Админ ID: {Config.ADMIN_ID}")
-    print(f"💰 Курс RUB: 1₽ = {Config.RUB_TO_GMP} GMP")
-    print(f"⭐ Курс подарка: 1⭐ = {Config.STAR_TO_GMP_GIFT} GMP")
-    print(f"⭐ Курс баланса: 1⭐ = {Config.STAR_TO_GMP_BALANCE} GMP")
+    print(f"💰 Курс RUB: {db.get_setting_float('RUB_TO_GMP')} GMP")
+    print(f"⭐ Курс подарка: {db.get_setting_float('STAR_TO_GMP_GIFT')} GMP")
+    print(f"⭐ Курс баланса: {db.get_setting_float('STAR_TO_GMP_BALANCE')} GMP")
     print(f"📤 Получатель подарков: {Config.GIFT_RECIPIENT}")
     print(f"🎁 Кейс каждые: {Config.CASE_COOLDOWN_MINUTES} минут")
     print(f"🎯 Кейс: {Config.MIN_CASE_REWARD}-{Config.MAX_CASE_REWARD} GMP")
