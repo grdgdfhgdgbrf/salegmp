@@ -48,10 +48,10 @@ class Config:
     MIN_CRYPTO_AMOUNT = 1
     MAX_CRYPTO_AMOUNT = 1000
 
-    CARD_NUMBER = "4100119356378762"
-    PHONE_NUMBER = "+7 908 652 31 55"
-    BANK_NAME = "Yoomoney"
-    RECIPIENT_NAME = "Иван Юрьевич Д."
+    CARD_NUMBER = "нет"
+    PHONE_NUMBER = "+7 920 008 91 84"
+    BANK_NAME = "озон банк"
+    RECIPIENT_NAME = "Тимофей Дмитриевич Р. "
 
     # Старые криптореквизиты больше не нужны
     # CRYPTO_WALLET = "0x..."
