@@ -28,7 +28,7 @@ class Config:
     ADMIN_ID = 5356400377
 
     # Crypto Pay API
-    CRYPTO_PAY_TOKEN = "623226:AASoMpraTshjaXwOfGik0L5a5cz7QUJ16cw"
+    CRYPTO_PAY_TOKEN = "521377:AAx2ftqZQuV65i7lPPaJHbSlYe8zN8p4LGT"
     CRYPTO_PAY_API_URL = "https://pay.crypt.bot/api"
 
     CHANNEL_LINK = "https://t.me/gmp_owner"
