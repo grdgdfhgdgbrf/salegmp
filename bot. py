@@ -29,6 +29,9 @@ class Config:
     CHANNEL_LINK = "https://t.me/gmp_owner"
     CHANNEL_ID = "@gmp_owner"
 
+    REVIEWS_LINK = "https://t.me/otzuwowner"   # канал с отзывами
+    REVIEWS_ID = "@otzuwowner"
+
     SUPPORT_LINK = "@hjklgf1"
     BOT_USERNAME = "@Sale_gmpbot"
 
@@ -587,7 +590,6 @@ def safe_edit_or_send(chat_id, message_id, text, reply_markup=None, parse_mode=N
         bot.edit_message_text(text, chat_id, message_id, parse_mode=parse_mode, reply_markup=reply_markup)
         return True
     except Exception as e:
-        # Игнорируем ошибку "message is not modified"
         if "message is not modified" in str(e):
             return True
         logger.error(f"Ошибка редактирования: {e}")
@@ -660,14 +662,15 @@ def main_menu_keyboard(user_id=None):
     btn1 = types.InlineKeyboardButton("💸 Купить GMP", callback_data="buy_gmp")
     btn2 = types.InlineKeyboardButton("📢 Live канал", callback_data="channel")
     btn3 = types.InlineKeyboardButton("🆘 Support", callback_data="support")
-    btn4 = types.InlineKeyboardButton("👤 Профиль", callback_data="profile")
-    btn5 = types.InlineKeyboardButton("📊 История заказов", callback_data="history")
-    btn6 = types.InlineKeyboardButton("🎁 Бесплатный кейс", callback_data="free_case")
-    btn7 = types.InlineKeyboardButton("🔗 Реферальная ссылка", callback_data="referral")
+    btn4 = types.InlineKeyboardButton("📢 Отзывы", callback_data="reviews")   # новая кнопка
+    btn5 = types.InlineKeyboardButton("👤 Профиль", callback_data="profile")
+    btn6 = types.InlineKeyboardButton("📊 История заказов", callback_data="history")
+    btn7 = types.InlineKeyboardButton("🎁 Бесплатный кейс", callback_data="free_case")
+    btn8 = types.InlineKeyboardButton("🔗 Реферальная ссылка", callback_data="referral")
     keyboard.add(btn1, btn2)
     keyboard.add(btn3, btn4)
     keyboard.add(btn5, btn6)
-    keyboard.add(btn7)
+    keyboard.add(btn7, btn8)
     if user_id and is_admin(user_id):
         btn_admin = types.InlineKeyboardButton("⚙️ Админ-панель", callback_data="admin_panel")
         keyboard.add(btn_admin)
@@ -733,6 +736,13 @@ def support_keyboard():
 def channel_keyboard():
     keyboard = types.InlineKeyboardMarkup(row_width=1)
     btn1 = types.InlineKeyboardButton("📢 Перейти в канал", url=Config.CHANNEL_LINK)
+    btn2 = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_main")
+    keyboard.add(btn1, btn2)
+    return keyboard
+
+def reviews_keyboard():
+    keyboard = types.InlineKeyboardMarkup(row_width=1)
+    btn1 = types.InlineKeyboardButton("📢 Перейти в канал отзывов", url=Config.REVIEWS_LINK)
     btn2 = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_main")
     keyboard.add(btn1, btn2)
     return keyboard
@@ -961,6 +971,22 @@ def callback_handler(call):
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=channel_keyboard())
         return
 
+    # ====== ОТЗЫВЫ (НОВАЯ КНОПКА) ======
+    if call.data == "reviews":
+        text = (
+            "📢 <b>Канал с отзывами</b>\n\n"
+            "Здесь вы можете прочитать реальные отзывы наших клиентов.\n"
+            "Убедитесь сами в надёжности и качестве нашего сервиса!\n\n"
+            "🔽 Переходи по ссылке ниже:"
+        )
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=reviews_keyboard())
+        except Exception as e:
+            if "message is not modified" not in str(e):
+                logger.error(f"Ошибка reviews: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=reviews_keyboard())
+        return
+
     # ====== ПОДДЕРЖКА ======
     if call.data == "support":
         text = (
@@ -1170,7 +1196,6 @@ def callback_handler(call):
         try:
             bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=case_open_keyboard())
         except Exception as e:
-            # Игнорируем ошибку "message is not modified"
             if "message is not modified" not in str(e):
                 logger.error(f"Ошибка what_is_case: {e}")
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=case_open_keyboard())
@@ -2234,6 +2259,7 @@ if __name__ == "__main__":
     print("🤖 BRAWL AKIM GMP BOT v3.0")
     print("=" * 60)
     print(f"📢 Канал: {Config.CHANNEL_LINK}")
+    print(f"📢 Отзывы: {Config.REVIEWS_LINK}")
     print(f"👨‍💻 Админ ID: {Config.ADMIN_ID}")
     print(f"💰 Цена 1 GMP: {db.get_setting_float('PRICE_PER_GMP_RUB'):.2f} ₽")
     print(f"💲 Курс крипты: 1 USD = {db.get_setting_float('CRYPTO_RATE'):.2f} GMP")
@@ -2244,7 +2270,6 @@ if __name__ == "__main__":
     print("🔄 Бот запущен и готов к работе!")
     print("=" * 60)
     try:
-        # Увеличиваем таймаут для предотвращения ошибок чтения
         bot.polling(none_stop=True, interval=0, timeout=60)
     except Exception as e:
         logger.error(f"Критическая ошибка: {e}")
