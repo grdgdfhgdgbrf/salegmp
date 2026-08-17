@@ -587,6 +587,9 @@ def safe_edit_or_send(chat_id, message_id, text, reply_markup=None, parse_mode=N
         bot.edit_message_text(text, chat_id, message_id, parse_mode=parse_mode, reply_markup=reply_markup)
         return True
     except Exception as e:
+        # Игнорируем ошибку "message is not modified"
+        if "message is not modified" in str(e):
+            return True
         logger.error(f"Ошибка редактирования: {e}")
         try:
             bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
@@ -860,7 +863,8 @@ def show_main_menu(chat_id, message_id=None):
         try:
             bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=markup)
         except Exception as e:
-            logger.error(f"Ошибка редактирования главного меню: {e}")
+            if "message is not modified" not in str(e):
+                logger.error(f"Ошибка редактирования главного меню: {e}")
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
     else:
         bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
@@ -930,7 +934,8 @@ def callback_handler(call):
         try:
             bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=payment_methods_keyboard())
         except Exception as e:
-            logger.error(f"Ошибка back_to_payment: {e}")
+            if "message is not modified" not in str(e):
+                logger.error(f"Ошибка back_to_payment: {e}")
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=payment_methods_keyboard())
         return
 
@@ -951,7 +956,8 @@ def callback_handler(call):
         try:
             bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=channel_keyboard())
         except Exception as e:
-            logger.error(f"Ошибка channel: {e}")
+            if "message is not modified" not in str(e):
+                logger.error(f"Ошибка channel: {e}")
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=channel_keyboard())
         return
 
@@ -967,7 +973,8 @@ def callback_handler(call):
         try:
             bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=support_keyboard())
         except Exception as e:
-            logger.error(f"Ошибка support: {e}")
+            if "message is not modified" not in str(e):
+                logger.error(f"Ошибка support: {e}")
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=support_keyboard())
         return
 
@@ -997,7 +1004,8 @@ def callback_handler(call):
         try:
             bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=back_to_main_keyboard())
         except Exception as e:
-            logger.error(f"Ошибка profile: {e}")
+            if "message is not modified" not in str(e):
+                logger.error(f"Ошибка profile: {e}")
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=back_to_main_keyboard())
         return
 
@@ -1061,7 +1069,8 @@ def callback_handler(call):
         try:
             bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=balance_keyboard())
         except Exception as e:
-            logger.error(f"Ошибка withdraw_history: {e}")
+            if "message is not modified" not in str(e):
+                logger.error(f"Ошибка withdraw_history: {e}")
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=balance_keyboard())
         return
 
@@ -1084,7 +1093,8 @@ def callback_handler(call):
         try:
             bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=back_to_main_keyboard())
         except Exception as e:
-            logger.error(f"Ошибка history: {e}")
+            if "message is not modified" not in str(e):
+                logger.error(f"Ошибка history: {e}")
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=back_to_main_keyboard())
         return
 
@@ -1099,7 +1109,8 @@ def callback_handler(call):
         try:
             bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=case_open_keyboard())
         except Exception as e:
-            logger.error(f"Ошибка free_case: {e}")
+            if "message is not modified" not in str(e):
+                logger.error(f"Ошибка free_case: {e}")
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=case_open_keyboard())
         return
 
@@ -1143,7 +1154,8 @@ def callback_handler(call):
         try:
             bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=case_keyboard())
         except Exception as e:
-            logger.error(f"Ошибка open_case: {e}")
+            if "message is not modified" not in str(e):
+                logger.error(f"Ошибка open_case: {e}")
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=case_keyboard())
         return
 
@@ -1158,7 +1170,9 @@ def callback_handler(call):
         try:
             bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=case_open_keyboard())
         except Exception as e:
-            logger.error(f"Ошибка what_is_case: {e}")
+            # Игнорируем ошибку "message is not modified"
+            if "message is not modified" not in str(e):
+                logger.error(f"Ошибка what_is_case: {e}")
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=case_open_keyboard())
         return
 
@@ -1187,7 +1201,8 @@ def callback_handler(call):
         try:
             bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=referral_keyboard())
         except Exception as e:
-            logger.error(f"Ошибка referral: {e}")
+            if "message is not modified" not in str(e):
+                logger.error(f"Ошибка referral: {e}")
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=referral_keyboard())
         return
 
@@ -1221,7 +1236,8 @@ def callback_handler(call):
         try:
             bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=payment_methods_keyboard())
         except Exception as e:
-            logger.error(f"Ошибка buy_gmp: {e}")
+            if "message is not modified" not in str(e):
+                logger.error(f"Ошибка buy_gmp: {e}")
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=payment_methods_keyboard())
         return
 
@@ -1236,7 +1252,8 @@ def callback_handler(call):
         try:
             bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=rubles_back_keyboard())
         except Exception as e:
-            logger.error(f"Ошибка rubles: {e}")
+            if "message is not modified" not in str(e):
+                logger.error(f"Ошибка rubles: {e}")
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=rubles_back_keyboard())
         bot.register_next_step_handler(call.message, handle_rubles_amount)
         return
@@ -1252,7 +1269,8 @@ def callback_handler(call):
         try:
             bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=crypto_back_keyboard())
         except Exception as e:
-            logger.error(f"Ошибка crypto: {e}")
+            if "message is not modified" not in str(e):
+                logger.error(f"Ошибка crypto: {e}")
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=crypto_back_keyboard())
         bot.register_next_step_handler(call.message, handle_crypto_amount)
         return
@@ -1266,7 +1284,8 @@ def callback_handler(call):
         try:
             bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=admin_panel_keyboard())
         except Exception as e:
-            logger.error(f"Ошибка admin_panel: {e}")
+            if "message is not modified" not in str(e):
+                logger.error(f"Ошибка admin_panel: {e}")
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=admin_panel_keyboard())
         return
 
@@ -1294,7 +1313,8 @@ def callback_handler(call):
         try:
             bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=back_to_main_keyboard())
         except Exception as e:
-            logger.error(f"Ошибка admin_settings: {e}")
+            if "message is not modified" not in str(e):
+                logger.error(f"Ошибка admin_settings: {e}")
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=back_to_main_keyboard())
         bot.register_next_step_handler(call.message, handle_admin_settings_choice)
         return
@@ -1327,7 +1347,8 @@ def callback_handler(call):
         try:
             bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=admin_bans_keyboard())
         except Exception as e:
-            logger.error(f"Ошибка admin_bans: {e}")
+            if "message is not modified" not in str(e):
+                logger.error(f"Ошибка admin_bans: {e}")
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=admin_bans_keyboard())
         return
 
@@ -1350,7 +1371,8 @@ def callback_handler(call):
         try:
             bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=keyboard)
         except Exception as e:
-            logger.error(f"Ошибка admin_ban_list: {e}")
+            if "message is not modified" not in str(e):
+                logger.error(f"Ошибка admin_ban_list: {e}")
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=keyboard)
         return
 
@@ -1415,7 +1437,8 @@ def callback_handler(call):
         try:
             bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=cancel_keyboard())
         except Exception as e:
-            logger.error(f"Ошибка confirm_rubles_: {e}")
+            if "message is not modified" not in str(e):
+                logger.error(f"Ошибка confirm_rubles_: {e}")
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=cancel_keyboard())
         bot.register_next_step_handler(call.message, handle_rubles_screenshot, order_id)
         return
@@ -1438,7 +1461,8 @@ def callback_handler(call):
         try:
             bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=cancel_keyboard())
         except Exception as e:
-            logger.error(f"Ошибка confirm_crypto_: {e}")
+            if "message is not modified" not in str(e):
+                logger.error(f"Ошибка confirm_crypto_: {e}")
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=cancel_keyboard())
         bot.register_next_step_handler(call.message, handle_crypto_screenshot, order_id)
         return
@@ -1461,7 +1485,8 @@ def callback_handler(call):
             try:
                 bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=admin_orders_keyboard())
             except Exception as e:
-                logger.error(f"Ошибка admin_orders: {e}")
+                if "message is not modified" not in str(e):
+                    logger.error(f"Ошибка admin_orders: {e}")
                 bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=admin_orders_keyboard())
             return
 
@@ -1481,7 +1506,8 @@ def callback_handler(call):
             try:
                 bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=keyboard)
             except Exception as e:
-                logger.error(f"Ошибка admin_withdraws: {e}")
+                if "message is not modified" not in str(e):
+                    logger.error(f"Ошибка admin_withdraws: {e}")
                 bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=keyboard)
             return
 
@@ -1524,7 +1550,8 @@ def callback_handler(call):
             try:
                 bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=admin_stats_keyboard())
             except Exception as e:
-                logger.error(f"Ошибка admin_stats: {e}")
+                if "message is not modified" not in str(e):
+                    logger.error(f"Ошибка admin_stats: {e}")
                 bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=admin_stats_keyboard())
             return
 
@@ -1911,7 +1938,7 @@ def handle_rubles_amount(message):
             bot.register_next_step_handler(message, handle_rubles_amount)
             return
         price = db.get_setting_float('PRICE_PER_GMP_RUB')
-        gmp = amount / price  # GMP = рубли / цена за 1 GMP
+        gmp = amount / price
         order_id = db.create_order(user_id, "rubles", amount, gmp)
         text = (
             f"💳 <b>{amount:.2f} ₽ → {gmp:.2f} GMP</b>\n\n"
@@ -2012,7 +2039,7 @@ def handle_crypto_amount(message):
             bot.register_next_step_handler(message, handle_crypto_amount)
             return
         rate = db.get_setting_float('CRYPTO_RATE')
-        gmp = amount * rate  # GMP = USD * курс
+        gmp = amount * rate
         order_id = db.create_order(user_id, "crypto", amount, gmp)
         text = (
             f"💲 <b>{amount:.2f} USD → {gmp:.2f} GMP</b>\n\n"
@@ -2210,7 +2237,6 @@ if __name__ == "__main__":
     print(f"👨‍💻 Админ ID: {Config.ADMIN_ID}")
     print(f"💰 Цена 1 GMP: {db.get_setting_float('PRICE_PER_GMP_RUB'):.2f} ₽")
     print(f"💲 Курс крипты: 1 USD = {db.get_setting_float('CRYPTO_RATE'):.2f} GMP")
-    print(f"📤 Получатель подарков (убрано): -")
     print(f"🎁 Кейс каждые: {db.get_setting_int('CASE_COOLDOWN_MINUTES')} мин")
     print(f"🎯 Кейс: {db.get_setting_int('MIN_CASE_REWARD')}-{db.get_setting_int('MAX_CASE_REWARD')} GMP")
     print(f"👥 Рефералов для вывода: {db.get_setting_int('MIN_REFERRALS_FOR_WITHDRAW')}")
@@ -2218,7 +2244,8 @@ if __name__ == "__main__":
     print("🔄 Бот запущен и готов к работе!")
     print("=" * 60)
     try:
-        bot.polling(none_stop=True, interval=0)
+        # Увеличиваем таймаут для предотвращения ошибок чтения
+        bot.polling(none_stop=True, interval=0, timeout=60)
     except Exception as e:
         logger.error(f"Критическая ошибка: {e}")
         print(f"❌ Ошибка: {e}")
