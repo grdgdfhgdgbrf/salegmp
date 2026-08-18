@@ -8,7 +8,6 @@ import re
 import logging
 import json
 import os
-import requests
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, BotCommand
 
 # ========== НАСТРОЙКА ЛОГГИРОВАНИЯ ==========
@@ -24,26 +23,24 @@ logger = logging.getLogger(__name__)
 
 # ========== КОНФИГУРАЦИЯ ==========
 class Config:
-    BOT_TOKEN = "8918094777:AAH6bDZoH8PcSnuj0STi8ycKu7zk8HSHFz8"
+    BOT_TOKEN = "8918094777:AAH6bDZoH8PcSnuj0STi8ycKu7zk8HSHFz8"  # ЗАМЕНИТЕ НА РАБОЧИЙ ТОКЕН
     ADMIN_ID = 5356400377
-
-    CRYPTO_PAY_TOKEN = "623226:AASoMpraTshjaXwOfGik0L5a5cz7QUJ16cw"
-    CRYPTO_PAY_API_URL = "https://pay.crypt.bot/api"
 
     CHANNEL_LINK = "https://t.me/gmp_owner"
     CHANNEL_ID = "@gmp_owner"
+
     REVIEWS_LINK = "https://t.me/otzuwowner"
     REVIEWS_ID = "@otzuwowner"
+
     SUPPORT_LINK = "@hjklgf1"
     BOT_USERNAME = "@Sale_gmpbot"
 
-    PRICE_PER_GMP_RUB = 0.67
-    CRYPTO_RATE = 1.0
+    # Начальные значения (будут перезаписаны из БД)
+    PRICE_PER_GMP_RUB = 0.67          # цена 1 GMP в рублях
     MIN_RUB_AMOUNT = 50
     MAX_RUB_AMOUNT = 50000
-    MIN_CRYPTO_AMOUNT = 1
-    MAX_CRYPTO_AMOUNT = 1000
 
+    # Реквизиты карты (начальные, будут перезаписаны из БД)
     CARD_NUMBER = "4100119356378762"
     PHONE_NUMBER = "+7 908 652 31 55"
     BANK_NAME = "Yoomoney"
@@ -70,6 +67,7 @@ class Database:
     def init_db(self):
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
+
         cur.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -89,6 +87,7 @@ class Database:
                 total_withdrawn REAL DEFAULT 0
             )
         ''')
+
         cur.execute('''
             CREATE TABLE IF NOT EXISTS orders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,7 +97,6 @@ class Database:
                 gmp_amount REAL,
                 status TEXT DEFAULT 'pending',
                 screenshot_file_id TEXT,
-                crypto_invoice_id TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 confirmed_at TIMESTAMP,
@@ -106,6 +104,7 @@ class Database:
                 user_message_id INTEGER
             )
         ''')
+
         cur.execute('''
             CREATE TABLE IF NOT EXISTS bonus_balance (
                 user_id INTEGER PRIMARY KEY,
@@ -113,6 +112,7 @@ class Database:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+
         cur.execute('''
             CREATE TABLE IF NOT EXISTS bonus_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -123,6 +123,7 @@ class Database:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+
         cur.execute('''
             CREATE TABLE IF NOT EXISTS banned_users (
                 user_id INTEGER PRIMARY KEY,
@@ -131,6 +132,7 @@ class Database:
                 banned_by INTEGER DEFAULT NULL
             )
         ''')
+
         cur.execute('''
             CREATE TABLE IF NOT EXISTS referrals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -139,6 +141,7 @@ class Database:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+
         cur.execute('''
             CREATE TABLE IF NOT EXISTS withdraw_requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -152,12 +155,14 @@ class Database:
                 user_message_id INTEGER
             )
         ''')
+
         cur.execute('''
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT
             )
         ''')
+
         conn.commit()
         conn.close()
         logger.info("База данных инициализирована")
@@ -165,8 +170,10 @@ class Database:
     def migrate_db(self):
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
+
         cur.execute("PRAGMA table_info(users)")
         columns = [col[1] for col in cur.fetchall()]
+
         if 'total_withdrawn' not in columns:
             cur.execute("ALTER TABLE users ADD COLUMN total_withdrawn REAL DEFAULT 0")
         if 'referral_earnings' not in columns:
@@ -174,32 +181,29 @@ class Database:
         if 'last_case_open' not in columns:
             cur.execute("ALTER TABLE users ADD COLUMN last_case_open TIMESTAMP DEFAULT NULL")
 
-        cur.execute("PRAGMA table_info(orders)")
-        columns = [col[1] for col in cur.fetchall()]
-        if 'crypto_invoice_id' not in columns:
-            cur.execute("ALTER TABLE orders ADD COLUMN crypto_invoice_id TEXT")
-
         cur.execute("PRAGMA table_info(banned_users)")
         columns = [col[1] for col in cur.fetchall()]
         if 'banned_by' not in columns:
             cur.execute("ALTER TABLE banned_users ADD COLUMN banned_by INTEGER DEFAULT NULL")
+
         conn.commit()
         conn.close()
 
     def init_settings(self):
         defaults = {
             'PRICE_PER_GMP_RUB': str(Config.PRICE_PER_GMP_RUB),
-            'CRYPTO_RATE': str(Config.CRYPTO_RATE),
             'MIN_RUB_AMOUNT': str(Config.MIN_RUB_AMOUNT),
             'MAX_RUB_AMOUNT': str(Config.MAX_RUB_AMOUNT),
-            'MIN_CRYPTO_AMOUNT': str(Config.MIN_CRYPTO_AMOUNT),
-            'MAX_CRYPTO_AMOUNT': str(Config.MAX_CRYPTO_AMOUNT),
             'MIN_WITHDRAW_GMP': str(Config.MIN_WITHDRAW_GMP),
             'MIN_REFERRALS_FOR_WITHDRAW': str(Config.MIN_REFERRALS_FOR_WITHDRAW),
             'REFERRAL_PERCENT': str(Config.REFERRAL_PERCENT),
             'CASE_COOLDOWN_MINUTES': str(Config.CASE_COOLDOWN_MINUTES),
             'MIN_CASE_REWARD': str(Config.MIN_CASE_REWARD),
-            'MAX_CASE_REWARD': str(Config.MAX_CASE_REWARD)
+            'MAX_CASE_REWARD': str(Config.MAX_CASE_REWARD),
+            'CARD_NUMBER': Config.CARD_NUMBER,
+            'PHONE_NUMBER': Config.PHONE_NUMBER,
+            'BANK_NAME': Config.BANK_NAME,
+            'RECIPIENT_NAME': Config.RECIPIENT_NAME
         }
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
@@ -233,14 +237,7 @@ class Database:
         conn.close()
         logger.info(f"Настройка {key} изменена на {value}")
 
-    def update_order_invoice(self, order_id, invoice_id):
-        conn = sqlite3.connect(self.db_path)
-        cur = conn.cursor()
-        cur.execute('UPDATE orders SET crypto_invoice_id = ? WHERE id = ?', (invoice_id, order_id))
-        conn.commit()
-        conn.close()
-
-    # ---------- методы для пользователей ----------
+    # ========== МЕТОДЫ ДЛЯ ПОЛЬЗОВАТЕЛЕЙ ==========
     def get_user(self, user_id):
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
@@ -318,7 +315,7 @@ class Database:
         conn.close()
         logger.info(f"Пользователь {user_id} разбанен")
 
-    # ---------- рефералы ----------
+    # ========== РЕФЕРАЛЫ ==========
     def add_referral(self, referrer_id, referred_id):
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
@@ -349,7 +346,7 @@ class Database:
         conn.commit()
         conn.close()
 
-    # ---------- бонусный баланс ----------
+    # ========== БОНУСНЫЙ БАЛАНС ==========
     def get_bonus_balance(self, user_id):
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
@@ -393,7 +390,7 @@ class Database:
         conn.commit()
         conn.close()
 
-    # ---------- заказы ----------
+    # ========== ЗАКАЗЫ ==========
     def create_order(self, user_id, order_type, amount, gmp_amount):
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
@@ -430,7 +427,7 @@ class Database:
         conn.close()
         return total
 
-    def update_order_status(self, order_id, status, screenshot_file_id=None, admin_msg_id=None, user_msg_id=None, invoice_id=None):
+    def update_order_status(self, order_id, status, screenshot_file_id=None, admin_msg_id=None, user_msg_id=None):
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
         updates = []
@@ -444,9 +441,6 @@ class Database:
         if user_msg_id is not None:
             updates.append("user_message_id = ?")
             params.append(user_msg_id)
-        if invoice_id is not None:
-            updates.append("crypto_invoice_id = ?")
-            params.append(invoice_id)
         updates.append("status = ?")
         params.append(status)
         updates.append("updated_at = CURRENT_TIMESTAMP")
@@ -473,7 +467,7 @@ class Database:
         conn.close()
         return orders
 
-    # ---------- вывод ----------
+    # ========== ВЫВОД ==========
     def create_withdraw_request(self, user_id, amount, recipient):
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
@@ -552,65 +546,9 @@ class Database:
         return updated > 0
 
 
-# ========== CRYPTO PAY ==========
-class CryptoPay:
-    def __init__(self, token):
-        self.token = token
-        self.base_url = Config.CRYPTO_PAY_API_URL
-
-    def _request(self, method, params=None):
-        url = f"{self.base_url}/{method}"
-        headers = {
-            'Crypto-Pay-API-Token': self.token,
-            'Content-Type': 'application/json'
-        }
-        logger.info(f"Crypto Pay request: {method} params={params}")
-        try:
-            response = requests.post(url, json=params or {}, headers=headers, timeout=30)
-            logger.info(f"Crypto Pay response: {response.status_code} - {response.text}")
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('ok'):
-                    return data.get('result')
-                else:
-                    logger.error(f"Crypto Pay API error: {data}")
-                    return None
-            else:
-                logger.error(f"Crypto Pay API HTTP error: {response.status_code} - {response.text}")
-                return None
-        except Exception as e:
-            logger.error(f"Crypto Pay API request failed: {e}")
-            return None
-
-    def create_invoice(self, amount, currency='USD', description='Пополнение GMP'):
-        params = {
-            'amount': amount,
-            'currency_type': 'fiat',
-            'currency': currency,
-            'description': description,
-            'expires_in': 3600
-        }
-        return self._request('createInvoice', params)
-
-    def check_invoice_status(self, invoice_id):
-        params = {'invoice_id': invoice_id}
-        result = self._request('getInvoices', params)
-        if result and 'items' in result and len(result['items']) > 0:
-            return result['items'][0]
-        return None
-
-    def is_paid(self, invoice_id):
-        invoice = self.check_invoice_status(invoice_id)
-        if invoice:
-            status = invoice.get('status')
-            return status == 'paid'
-        return False
-
-
 # ========== ИНИЦИАЛИЗАЦИЯ ==========
 db = Database(Config.DB_PATH)
 bot = telebot.TeleBot(Config.BOT_TOKEN)
-crypto_pay = CryptoPay(Config.CRYPTO_PAY_TOKEN)
 BOT_ID = None
 
 def get_bot_id():
@@ -742,20 +680,20 @@ def admin_panel_keyboard():
     btn5 = types.InlineKeyboardButton("🚫 Управление банами", callback_data="admin_bans")
     btn6 = types.InlineKeyboardButton("💱 Настройки", callback_data="admin_settings")
     btn7 = types.InlineKeyboardButton("➕ Добавить GMP", callback_data="admin_add_gmp")
-    btn8 = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_main")
+    btn8 = types.InlineKeyboardButton("💳 Реквизиты карты", callback_data="admin_card_details")
+    btn9 = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_main")
     keyboard.add(btn1, btn2)
     keyboard.add(btn3, btn4)
     keyboard.add(btn5, btn6)
     keyboard.add(btn7, btn8)
+    keyboard.add(btn9)
     return keyboard
 
 def payment_methods_keyboard():
-    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    keyboard = types.InlineKeyboardMarkup(row_width=1)
     btn1 = types.InlineKeyboardButton("💳 Банковская карта", callback_data="rubles")
-    btn2 = types.InlineKeyboardButton("💲 Crypto Pay", callback_data="crypto_pay")
-    btn3 = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_main")
+    btn2 = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_main")
     keyboard.add(btn1, btn2)
-    keyboard.add(btn3)
     return keyboard
 
 def confirm_rubles_keyboard(order_id):
@@ -763,15 +701,6 @@ def confirm_rubles_keyboard(order_id):
     btn1 = types.InlineKeyboardButton("✅ Я оплатил!", callback_data=f"confirm_rubles_{order_id}")
     btn2 = types.InlineKeyboardButton("❌ Отмена", callback_data="cancel_order")
     keyboard.add(btn1, btn2)
-    return keyboard
-
-def confirm_crypto_keyboard(order_id):
-    keyboard = types.InlineKeyboardMarkup(row_width=2)
-    btn1 = types.InlineKeyboardButton("✅ Я оплатил!", callback_data=f"confirm_crypto_{order_id}")
-    btn2 = types.InlineKeyboardButton("🔄 Проверить оплату", callback_data=f"check_crypto_{order_id}")
-    btn3 = types.InlineKeyboardButton("❌ Отмена", callback_data="cancel_order")
-    keyboard.add(btn1, btn2)
-    keyboard.add(btn3)
     return keyboard
 
 def cancel_keyboard():
@@ -840,12 +769,6 @@ def rubles_back_keyboard():
     keyboard.add(btn1)
     return keyboard
 
-def crypto_back_keyboard():
-    keyboard = types.InlineKeyboardMarkup(row_width=1)
-    btn1 = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_payment")
-    keyboard.add(btn1)
-    return keyboard
-
 def case_keyboard():
     keyboard = types.InlineKeyboardMarkup(row_width=1)
     btn1 = types.InlineKeyboardButton("🫪 Панятна?", callback_data="what_is_case")
@@ -891,8 +814,7 @@ def admin_bans_keyboard():
     keyboard.add(btn3, btn4)
     return keyboard
 
-
-# ========== ПОКАЗ ГЛАВНОГО МЕНЮ ==========
+# ========== ФУНКЦИЯ ПОКАЗА ГЛАВНОГО МЕНЮ ==========
 def show_main_menu(chat_id, message_id=None):
     user_id = chat_id
     if db.is_user_banned(user_id):
@@ -924,8 +846,7 @@ def show_main_menu(chat_id, message_id=None):
         f"💰 <b>{Config.NAZVANIA} — твой надёжный поставщик GMP!</b>\n\n"
         "⚡️ <b>Что я могу:</b>\n"
         " • Продажа GMP по выгодному курсу\n"
-        " • Пополнение банковской картой\n"
-        " • Пополнение через Crypto Pay (криптовалюта)\n\n"
+        " • Пополнение банковской картой\n\n"
         "✨ <b>Выбери действие ниже:</b>"
     )
     markup = main_menu_keyboard(user_id)
@@ -938,7 +859,6 @@ def show_main_menu(chat_id, message_id=None):
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
     else:
         bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
-
 
 # ========== ОБРАБОТЧИКИ КОМАНД ==========
 @bot.message_handler(commands=['start'])
@@ -980,7 +900,6 @@ def start_command(message):
         bot.set_my_commands([BotCommand("start", "💸 Купить GMP")])
     except Exception as e:
         logger.error(f"Ошибка установки команд: {e}")
-
 
 # ========== КОЛБЭКИ ==========
 @bot.callback_query_handler(func=lambda call: True)
@@ -1317,8 +1236,7 @@ def callback_handler(call):
     if call.data == "buy_gmp":
         text = (
             "💳 <b>Выберите способ оплаты</b>\n\n"
-            "💳 <b>Банковская карта</b> — надёжный способ\n"
-            "💲 <b>Crypto Pay</b> — криптовалюта через Telegram"
+            "💳 <b>Банковская карта</b> — надёжный способ"
         )
         try:
             bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=payment_methods_keyboard())
@@ -1330,9 +1248,13 @@ def callback_handler(call):
 
     # ====== РУБЛИ ======
     if call.data == "rubles":
+        price = db.get_setting_float('PRICE_PER_GMP_RUB')
+        min_rub = db.get_setting_float('MIN_RUB_AMOUNT')
+        max_rub = db.get_setting_float('MAX_RUB_AMOUNT')
         text = (
             "💳 <b>Пополнение банковской картой</b>\n\n"
-            f"💰 Цена 1 GMP = <b>{db.get_setting_float('PRICE_PER_GMP_RUB'):.2f} ₽</b>\n\n"
+            f"💰 Цена 1 GMP = <b>{price:.2f} ₽</b>\n"
+            f"📊 Мин. сумма: <b>{min_rub:.2f} ₽</b>, Макс. <b>{max_rub:.2f} ₽</b>\n\n"
             "✏️ <b>Введите сумму в рублях</b>\n"
             "(можно дробные, например 100.50)"
         )
@@ -1343,23 +1265,6 @@ def callback_handler(call):
                 logger.error(f"Ошибка rubles: {e}")
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=rubles_back_keyboard())
         bot.register_next_step_handler(call.message, handle_rubles_amount)
-        return
-
-    # ====== CRYPTO PAY ======
-    if call.data == "crypto_pay":
-        text = (
-            "💲 <b>Пополнение через Crypto Pay</b>\n\n"
-            f"💰 Курс: 1 USD = <b>{db.get_setting_float('CRYPTO_RATE'):.2f} GMP</b>\n\n"
-            "✏️ <b>Введите сумму в USD</b>\n"
-            "(можно дробные, например 10.50)"
-        )
-        try:
-            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=crypto_back_keyboard())
-        except Exception as e:
-            if "message is not modified" not in str(e):
-                logger.error(f"Ошибка crypto_pay: {e}")
-            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=crypto_back_keyboard())
-        bot.register_next_step_handler(call.message, handle_crypto_pay_amount)
         return
 
     # ====== АДМИН: ВХОД В АДМИН-ПАНЕЛЬ ======
@@ -1376,6 +1281,36 @@ def callback_handler(call):
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=admin_panel_keyboard())
         return
 
+    # ====== АДМИН: РЕКВИЗИТЫ КАРТЫ ======
+    if call.data == "admin_card_details":
+        if not is_admin(user_id):
+            bot.answer_callback_query(call.id, "⛔ У вас нет прав!", show_alert=True)
+            return
+        card_num = db.get_setting('CARD_NUMBER') or "Не указано"
+        bank = db.get_setting('BANK_NAME') or "Не указано"
+        recipient = db.get_setting('RECIPIENT_NAME') or "Не указано"
+        phone = db.get_setting('PHONE_NUMBER') or "Не указано"
+        text = (
+            "💳 <b>Текущие реквизиты карты</b>\n\n"
+            f"💳 Номер карты: <code>{card_num}</code>\n"
+            f"🏦 Банк: {bank}\n"
+            f"👤 Получатель: {recipient}\n"
+            f"📱 Телефон: <code>{phone}</code>\n\n"
+            "Введите номер поля для изменения:\n"
+            "1 - Номер карты\n"
+            "2 - Банк\n"
+            "3 - Получатель\n"
+            "4 - Телефон"
+        )
+        try:
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=back_to_main_keyboard())
+        except Exception as e:
+            if "message is not modified" not in str(e):
+                logger.error(f"Ошибка admin_card_details: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=back_to_main_keyboard())
+        bot.register_next_step_handler(call.message, handle_admin_card_choice)
+        return
+
     # ====== АДМИН: НАСТРОЙКИ ======
     if call.data == "admin_settings":
         if not is_admin(user_id):
@@ -1385,17 +1320,14 @@ def callback_handler(call):
             "💱 <b>Настройки бота</b>\n\n"
             "Введите номер параметра для изменения:\n"
             "1 - Цена 1 GMP (₽)\n"
-            "2 - Курс крипты (GMP за 1 USD)\n"
-            "3 - Мин. сумма пополнения (₽)\n"
-            "4 - Макс. сумма пополнения (₽)\n"
-            "5 - Мин. сумма пополнения (USD)\n"
-            "6 - Макс. сумма пополнения (USD)\n"
-            "7 - Мин. сумма вывода (GMP)\n"
-            "8 - Кол-во рефералов для вывода\n"
-            "9 - % реферальных начислений\n"
-            "10 - Время кулдауна кейса (мин)\n"
-            "11 - Мин. награда кейса (GMP)\n"
-            "12 - Макс. награда кейса (GMP)"
+            "2 - Мин. сумма пополнения (₽)\n"
+            "3 - Макс. сумма пополнения (₽)\n"
+            "4 - Мин. сумма вывода (GMP)\n"
+            "5 - Кол-во рефералов для вывода\n"
+            "6 - % реферальных начислений\n"
+            "7 - Время кулдауна кейса (мин)\n"
+            "8 - Мин. награда кейса (GMP)\n"
+            "9 - Макс. награда кейса (GMP)"
         )
         try:
             bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=back_to_main_keyboard())
@@ -1513,6 +1445,11 @@ def callback_handler(call):
         if not order:
             bot.answer_callback_query(call.id, "❌ Заявка не найдена")
             return
+        # Получаем актуальные реквизиты карты из БД для отображения
+        card_num = db.get_setting('CARD_NUMBER')
+        bank = db.get_setting('BANK_NAME')
+        recipient = db.get_setting('RECIPIENT_NAME')
+        phone = db.get_setting('PHONE_NUMBER')
         text = (
             "📸 <b>Отправьте скриншот оплаты</b>\n\n"
             "✅ Убедитесь, что на скриншоте видно:\n"
@@ -1528,59 +1465,6 @@ def callback_handler(call):
                 logger.error(f"Ошибка confirm_rubles_: {e}")
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=cancel_keyboard())
         bot.register_next_step_handler(call.message, handle_rubles_screenshot, order_id)
-        return
-
-    # ====== ПОДТВЕРЖДЕНИЕ CRYPTO PAY ======
-    if call.data.startswith("confirm_crypto_"):
-        order_id = int(call.data.split("_")[2])
-        order = db.get_order(order_id)
-        if not order:
-            bot.answer_callback_query(call.id, "❌ Заявка не найдена")
-            return
-        invoice_id = order.get('crypto_invoice_id')
-        if invoice_id:
-            if crypto_pay.is_paid(invoice_id):
-                db.update_order_status(order_id, "confirmed")
-                db.update_bonus_balance(user_id, order['gmp_amount'], f"Пополнение через Crypto Pay: +{order['gmp_amount']} GMP")
-                bot.send_message(chat_id, f"✅ <b>Оплата подтверждена!</b>\n\n💎 Начислено: <b>{order['gmp_amount']:.2f} GMP</b>", parse_mode="HTML")
-                show_main_menu(chat_id)
-                if Config.ADMIN_ID:
-                    user = db.get_user(user_id)
-                    username = f"@{user['username']}" if user and user['username'] else f"ID: {user_id}"
-                    bot.send_message(Config.ADMIN_ID, f"✅ Crypto Pay заказ #{order_id} подтверждён автоматически.\n👤 {username}\n💎 {order['gmp_amount']:.2f} GMP")
-                return
-            else:
-                bot.answer_callback_query(call.id, "❌ Оплата пока не найдена. Попробуйте позже или нажмите «Проверить оплату».", show_alert=True)
-                return
-        else:
-            bot.answer_callback_query(call.id, "❌ Ошибка: отсутствует ID счёта.", show_alert=True)
-            return
-
-    # ====== ПРОВЕРКА CRYPTO PAY ======
-    if call.data.startswith("check_crypto_"):
-        order_id = int(call.data.split("_")[2])
-        order = db.get_order(order_id)
-        if not order:
-            bot.answer_callback_query(call.id, "❌ Заявка не найдена", show_alert=True)
-            return
-        invoice_id = order.get('crypto_invoice_id')
-        if invoice_id:
-            if crypto_pay.is_paid(invoice_id):
-                db.update_order_status(order_id, "confirmed")
-                db.update_bonus_balance(user_id, order['gmp_amount'], f"Пополнение через Crypto Pay: +{order['gmp_amount']} GMP")
-                bot.edit_message_text(
-                    f"✅ <b>Оплата подтверждена!</b>\n\n💎 Начислено: <b>{order['gmp_amount']:.2f} GMP</b>",
-                    chat_id, message_id, parse_mode="HTML"
-                )
-                show_main_menu(chat_id)
-                if Config.ADMIN_ID:
-                    user = db.get_user(user_id)
-                    username = f"@{user['username']}" if user and user['username'] else f"ID: {user_id}"
-                    bot.send_message(Config.ADMIN_ID, f"✅ Crypto Pay заказ #{order_id} подтверждён автоматически.\n👤 {username}\n💎 {order['gmp_amount']:.2f} GMP")
-            else:
-                bot.answer_callback_query(call.id, "⏳ Оплата ещё не получена. Подождите или проверьте позже.", show_alert=True)
-        else:
-            bot.answer_callback_query(call.id, "❌ Ошибка: отсутствует ID счёта.", show_alert=True)
         return
 
     # ========== АДМИН-ПАНЕЛЬ: ОСТАЛЬНЫЕ РАЗДЕЛЫ ==========
@@ -1648,7 +1532,6 @@ def callback_handler(call):
             total_banned = cur.fetchone()[0] or 0
             conn.close()
             price = db.get_setting_float('PRICE_PER_GMP_RUB')
-            crypto = db.get_setting_float('CRYPTO_RATE')
             text = (
                 "📊 <b>Статистика бота</b>\n\n"
                 f"👥 Пользователей: <b>{total_users}</b>\n"
@@ -1660,8 +1543,7 @@ def callback_handler(call):
                 f"💰 Выведено GMP: <b>{total_withdrawn:.2f}</b>\n"
                 f"🚫 Заблокировано: <b>{total_banned}</b>\n"
                 f"{divider()}\n"
-                f"💰 Цена 1 GMP: <b>{price:.2f} ₽</b>\n"
-                f"💲 Курс крипты: 1 USD = <b>{crypto:.2f} GMP</b>"
+                f"💰 Цена 1 GMP: <b>{price:.2f} ₽</b>"
             )
             try:
                 bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=admin_stats_keyboard())
@@ -1686,7 +1568,7 @@ def callback_handler(call):
             bot.register_next_step_handler(call.message, handle_broadcast)
             return
 
-    # ========== АДМИН: ПОДТВЕРЖДЕНИЕ (рубли) ==========
+    # ========== АДМИН: ПОДТВЕРЖДЕНИЕ ПОПОЛНЕНИЯ ==========
     if call.data.startswith("admin_confirm_"):
         order_id = int(call.data.split("_")[2])
         order = db.get_order(order_id)
@@ -1694,7 +1576,6 @@ def callback_handler(call):
             user = db.get_user(order['user_id'])
             username = f"@{user['username']}" if user and user['username'] else f"ID: {order['user_id']}"
             db.update_order_status(order_id, "confirmed")
-            db.update_bonus_balance(order['user_id'], order['gmp_amount'], f"Пополнение {order['type']}: +{order['gmp_amount']} GMP")
             conn = sqlite3.connect(Config.DB_PATH)
             cur = conn.cursor()
             cur.execute('UPDATE users SET orders_count = orders_count + 1 WHERE user_id = ?', (order['user_id'],))
@@ -1710,7 +1591,7 @@ def callback_handler(call):
                 if not is_bot_itself(order['user_id']):
                     text = (
                         f"✅ <b>Заявка #{order_id} одобрена!</b>\n\n"
-                        f"💎 Начислено: <b>{order['gmp_amount']:.2f} GMP</b>\n"
+                        f"💎 Куплено: <b>{order['gmp_amount']:.2f} GMP</b>\n"
                         "❤️ Спасибо за покупку!"
                     )
                     bot.send_message(order['user_id'], text, parse_mode="HTML")
@@ -1825,7 +1706,48 @@ def callback_handler(call):
 
 # ========== ОБРАБОТЧИКИ ВВОДА ==========
 
-# ----- АДМИН: НАСТРОЙКИ -----
+# ----- АДМИН: ИЗМЕНЕНИЕ РЕКВИЗИТОВ КАРТЫ -----
+def handle_admin_card_choice(message):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    if not is_admin(user_id):
+        return
+    try:
+        choice = int(message.text.strip())
+        if choice not in [1,2,3,4]:
+            raise ValueError
+    except:
+        bot.send_message(chat_id, "❌ Введите число от 1 до 4.", parse_mode="HTML")
+        return
+    mapping = {
+        1: ('CARD_NUMBER', 'номер карты'),
+        2: ('BANK_NAME', 'название банка'),
+        3: ('RECIPIENT_NAME', 'ФИО получателя'),
+        4: ('PHONE_NUMBER', 'номер телефона')
+    }
+    key, desc = mapping[choice]
+    msg = bot.send_message(
+        chat_id,
+        f"💳 Изменение <b>{desc}</b>\n\nТекущее значение: <b>{db.get_setting(key) or 'Не указано'}</b>\n\nВведите новое значение:",
+        parse_mode="HTML",
+        reply_markup=back_to_main_keyboard()
+    )
+    bot.register_next_step_handler(msg, handle_admin_card_value, key, desc)
+
+def handle_admin_card_value(message, key, desc):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    if not is_admin(user_id):
+        return
+    new_val = message.text.strip()
+    if not new_val:
+        bot.send_message(chat_id, "❌ Значение не может быть пустым.", parse_mode="HTML")
+        return
+    db.set_setting(key, new_val)
+    bot.send_message(chat_id, f"✅ <b>{desc}</b> успешно изменён на <b>{new_val}</b>", parse_mode="HTML")
+    show_main_menu(chat_id)
+
+# ----- АДМИН: ИЗМЕНЕНИЕ ОСНОВНЫХ НАСТРОЕК -----
 def handle_admin_settings_choice(message):
     user_id = message.from_user.id
     chat_id = message.chat.id
@@ -1834,24 +1756,21 @@ def handle_admin_settings_choice(message):
     try:
         choice = int(message.text.strip())
     except:
-        bot.send_message(chat_id, "❌ Введите число от 1 до 12.", parse_mode="HTML")
+        bot.send_message(chat_id, "❌ Введите число от 1 до 9.", parse_mode="HTML")
         return
     settings_map = {
         1: ('PRICE_PER_GMP_RUB', 'Цена 1 GMP (₽)', 'число', float),
-        2: ('CRYPTO_RATE', 'Курс крипты (GMP за 1 USD)', 'число', float),
-        3: ('MIN_RUB_AMOUNT', 'Мин. сумма пополнения (₽)', 'число', float),
-        4: ('MAX_RUB_AMOUNT', 'Макс. сумма пополнения (₽)', 'число', float),
-        5: ('MIN_CRYPTO_AMOUNT', 'Мин. сумма пополнения (USD)', 'число', float),
-        6: ('MAX_CRYPTO_AMOUNT', 'Макс. сумма пополнения (USD)', 'число', float),
-        7: ('MIN_WITHDRAW_GMP', 'Мин. сумма вывода (GMP)', 'число', float),
-        8: ('MIN_REFERRALS_FOR_WITHDRAW', 'Кол-во рефералов для вывода', 'целое число', int),
-        9: ('REFERRAL_PERCENT', '% реферальных начислений', 'число', float),
-        10: ('CASE_COOLDOWN_MINUTES', 'Время кулдауна кейса (мин)', 'число', float),
-        11: ('MIN_CASE_REWARD', 'Мин. награда кейса (GMP)', 'число', float),
-        12: ('MAX_CASE_REWARD', 'Макс. награда кейса (GMP)', 'число', float)
+        2: ('MIN_RUB_AMOUNT', 'Мин. сумма пополнения (₽)', 'число', float),
+        3: ('MAX_RUB_AMOUNT', 'Макс. сумма пополнения (₽)', 'число', float),
+        4: ('MIN_WITHDRAW_GMP', 'Мин. сумма вывода (GMP)', 'число', float),
+        5: ('MIN_REFERRALS_FOR_WITHDRAW', 'Кол-во рефералов для вывода', 'целое число', int),
+        6: ('REFERRAL_PERCENT', '% реферальных начислений', 'число', float),
+        7: ('CASE_COOLDOWN_MINUTES', 'Время кулдауна кейса (мин)', 'число', float),
+        8: ('MIN_CASE_REWARD', 'Мин. награда кейса (GMP)', 'число', float),
+        9: ('MAX_CASE_REWARD', 'Макс. награда кейса (GMP)', 'число', float)
     }
     if choice not in settings_map:
-        bot.send_message(chat_id, "❌ Неверный номер. Введите от 1 до 12.", parse_mode="HTML")
+        bot.send_message(chat_id, "❌ Неверный номер. Введите от 1 до 9.", parse_mode="HTML")
         return
     key, desc, type_desc, conv = settings_map[choice]
     current = db.get_setting(key)
@@ -1881,7 +1800,7 @@ def handle_admin_settings_value(message, key, conv, desc):
     bot.send_message(chat_id, f"✅ <b>{desc}</b> успешно изменено на <b>{new_val}</b>", parse_mode="HTML")
     show_main_menu(chat_id)
 
-# ----- АДМИН: ДОБАВЛЕНИЕ GMP -----
+# ----- АДМИН: ДОБАВЛЕНИЕ GMP ПОЛЬЗОВАТЕЛЮ -----
 def handle_admin_add_gmp_user(message):
     user_id = message.from_user.id
     chat_id = message.chat.id
@@ -2057,13 +1976,18 @@ def handle_rubles_amount(message):
         price = db.get_setting_float('PRICE_PER_GMP_RUB')
         gmp = amount / price
         order_id = db.create_order(user_id, "rubles", amount, gmp)
+        # Получаем актуальные реквизиты карты
+        card_num = db.get_setting('CARD_NUMBER') or Config.CARD_NUMBER
+        bank = db.get_setting('BANK_NAME') or Config.BANK_NAME
+        recipient = db.get_setting('RECIPIENT_NAME') or Config.RECIPIENT_NAME
+        phone = db.get_setting('PHONE_NUMBER') or Config.PHONE_NUMBER
         text = (
             f"💳 <b>{amount:.2f} ₽ → {gmp:.2f} GMP</b>\n\n"
             "🧾 <b>РЕКВИЗИТЫ ДЛЯ ОПЛАТЫ</b>\n"
-            f"💳 Номер карты: <code>{Config.CARD_NUMBER}</code>\n"
-            f"🏦 Банк: {Config.BANK_NAME}\n"
-            f"👤 Получатель: {Config.RECIPIENT_NAME}\n"
-            f"📱 Телефон: <code>{Config.PHONE_NUMBER}</code>\n\n"
+            f"💳 Номер карты: <code>{card_num}</code>\n"
+            f"🏦 Банк: {bank}\n"
+            f"👤 Получатель: {recipient}\n"
+            f"📱 Телефон: <code>{phone}</code>\n\n"
             "⚠️ <b>Внимание!</b>\n"
             "▫️ При переводе с другого банка могут быть комиссии\n"
             "▫️ Указывайте точную сумму в назначении платежа\n\n"
@@ -2126,70 +2050,6 @@ def handle_rubles_screenshot(message, order_id):
         parse_mode="HTML",
         reply_markup=back_to_main_keyboard()
     )
-
-# ----- CRYPTO PAY -----
-def handle_crypto_pay_amount(message):
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-    if is_bot_itself(user_id):
-        return
-    try:
-        amount = float(message.text.replace(',', '.'))
-        min_crypto = db.get_setting_float('MIN_CRYPTO_AMOUNT')
-        max_crypto = db.get_setting_float('MAX_CRYPTO_AMOUNT')
-        if amount < min_crypto:
-            bot.send_message(
-                chat_id,
-                f"❌ Минимальная сумма: <b>{min_crypto:.2f} USD</b>\n\n✏️ Введите корректную сумму",
-                parse_mode="HTML",
-                reply_markup=crypto_back_keyboard()
-            )
-            bot.register_next_step_handler(message, handle_crypto_pay_amount)
-            return
-        if amount > max_crypto:
-            bot.send_message(
-                chat_id,
-                f"❌ Максимальная сумма: <b>{max_crypto:.2f} USD</b>\n\n✏️ Введите корректную сумму",
-                parse_mode="HTML",
-                reply_markup=crypto_back_keyboard()
-            )
-            bot.register_next_step_handler(message, handle_crypto_pay_amount)
-            return
-        rate = db.get_setting_float('CRYPTO_RATE')
-        gmp = amount * rate
-        order_id = db.create_order(user_id, "crypto_pay", amount, gmp)
-
-        invoice = crypto_pay.create_invoice(amount, currency='USD', description=f'Пополнение GMP для пользователя {user_id}')
-        if invoice is None:
-            bot.send_message(chat_id, "❌ Ошибка при создании счёта. Попробуйте позже.", parse_mode="HTML")
-            return
-
-        invoice_id = invoice.get('invoice_id')
-        pay_url = invoice.get('pay_url')
-        if not invoice_id or not pay_url:
-            bot.send_message(chat_id, "❌ Ошибка: не получены данные счёта.", parse_mode="HTML")
-            return
-
-        db.update_order_status(order_id, status='pending', invoice_id=invoice_id)
-
-        text = (
-            f"💲 <b>{amount:.2f} USD → {gmp:.2f} GMP</b>\n\n"
-            "🧾 <b>Счёт создан!</b>\n"
-            f"🔗 <b>Ссылка для оплаты:</b>\n{pay_url}\n\n"
-            "1️⃣ Перейдите по ссылке и оплатите счёт.\n"
-            "2️⃣ После оплаты нажмите кнопку «✅ Я оплатил» для проверки.\n\n"
-            "📌 Если оплата не отображается, подождите 1–2 минуты и нажмите «🔄 Проверить оплату»."
-        )
-        msg = bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=confirm_crypto_keyboard(order_id))
-        db.update_order_status(order_id, status='pending', user_msg_id=msg.message_id, invoice_id=invoice_id)
-    except ValueError:
-        bot.send_message(
-            chat_id,
-            "❌ Введите <b>число</b> (можно дробное)\n\n✏️ Например: 50.75",
-            parse_mode="HTML",
-            reply_markup=crypto_back_keyboard()
-        )
-        bot.register_next_step_handler(message, handle_crypto_pay_amount)
 
 # ----- РАССЫЛКА -----
 def handle_broadcast(message):
@@ -2310,17 +2170,15 @@ def handle_unban_user(message):
         reply_markup=back_to_main_keyboard()
     )
 
-
-# ========== ЗАПУСК ==========
+# ========== ЗАПУСК БОТА ==========
 if __name__ == "__main__":
     print("=" * 60)
-    print("🤖 BRAWL AKIM GMP BOT v3.0 (Crypto Pay)")
+    print("🤖 BRAWL AKIM GMP BOT v3.0")
     print("=" * 60)
     print(f"📢 Канал: {Config.CHANNEL_LINK}")
     print(f"📢 Отзывы: {Config.REVIEWS_LINK}")
     print(f"👨‍💻 Админ ID: {Config.ADMIN_ID}")
     print(f"💰 Цена 1 GMP: {db.get_setting_float('PRICE_PER_GMP_RUB'):.2f} ₽")
-    print(f"💲 Курс крипты: 1 USD = {db.get_setting_float('CRYPTO_RATE'):.2f} GMP")
     print(f"🎁 Кейс каждые: {db.get_setting_int('CASE_COOLDOWN_MINUTES')} мин")
     print(f"🎯 Кейс: {db.get_setting_int('MIN_CASE_REWARD')}-{db.get_setting_int('MAX_CASE_REWARD')} GMP")
     print(f"👥 Рефералов для вывода: {db.get_setting_int('MIN_REFERRALS_FOR_WITHDRAW')}")
