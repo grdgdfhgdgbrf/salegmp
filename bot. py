@@ -35,8 +35,8 @@ class Config:
     SUPPORT_LINK = "@hjklgf1"
     BOT_USERNAME = "@Sale_gmpbot"
 
-    # Начальные значения (будут перезаписаны из БД)
-    PRICE_PER_GMP_RUB = 0.3         # цена 1 GMP в рублях
+    # Начальные значения (будут перезаписаны из БД при запуске)
+    PRICE_PER_GMP_RUB = 0.3
     MIN_RUB_AMOUNT = 1
     MAX_RUB_AMOUNT = 50000
 
@@ -551,6 +551,33 @@ db = Database(Config.DB_PATH)
 bot = telebot.TeleBot(Config.BOT_TOKEN)
 BOT_ID = None
 
+def sync_config_from_db():
+    """Синхронизирует переменные Config со значениями из базы данных"""
+    global Config
+    try:
+        # Основные настройки
+        Config.PRICE_PER_GMP_RUB = db.get_setting_float('PRICE_PER_GMP_RUB')
+        Config.MIN_RUB_AMOUNT = db.get_setting_float('MIN_RUB_AMOUNT')
+        Config.MAX_RUB_AMOUNT = db.get_setting_float('MAX_RUB_AMOUNT')
+        Config.MIN_WITHDRAW_GMP = db.get_setting_float('MIN_WITHDRAW_GMP')
+        Config.MIN_REFERRALS_FOR_WITHDRAW = db.get_setting_int('MIN_REFERRALS_FOR_WITHDRAW')
+        Config.REFERRAL_PERCENT = db.get_setting_float('REFERRAL_PERCENT')
+        Config.CASE_COOLDOWN_MINUTES = db.get_setting_int('CASE_COOLDOWN_MINUTES')
+        Config.MIN_CASE_REWARD = db.get_setting_int('MIN_CASE_REWARD')
+        Config.MAX_CASE_REWARD = db.get_setting_int('MAX_CASE_REWARD')
+        
+        # Реквизиты карты
+        Config.CARD_NUMBER = db.get_setting('CARD_NUMBER') or Config.CARD_NUMBER
+        Config.PHONE_NUMBER = db.get_setting('PHONE_NUMBER') or Config.PHONE_NUMBER
+        Config.BANK_NAME = db.get_setting('BANK_NAME') or Config.BANK_NAME
+        Config.RECIPIENT_NAME = db.get_setting('RECIPIENT_NAME') or Config.RECIPIENT_NAME
+        
+        logger.info("Конфигурация синхронизирована с базой данных")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка синхронизации конфигурации: {e}")
+        return False
+
 def get_bot_id():
     global BOT_ID
     if BOT_ID is None:
@@ -632,8 +659,8 @@ def show_balance(chat_id, message_id=None, user_id=None):
         return
     bonus_balance = db.get_bonus_balance(user_id)
     referrals = db.get_referrals_count(user_id)
-    min_withdraw = db.get_setting_float('MIN_WITHDRAW_GMP')
-    min_refs = db.get_setting_int('MIN_REFERRALS_FOR_WITHDRAW')
+    min_withdraw = Config.MIN_WITHDRAW_GMP
+    min_refs = Config.MIN_REFERRALS_FOR_WITHDRAW
     text = f"🎁 <b>Баланс GMP: {bonus_balance:.2f} GMP</b>\n\n"
     if referrals >= min_refs and bonus_balance >= min_withdraw:
         text += "✅ <b>Условия выполнены! Можете выводить</b>"
@@ -1025,8 +1052,8 @@ def callback_handler(call):
     if call.data == "withdraw_gmp":
         bonus_balance = db.get_bonus_balance(user_id)
         referrals = db.get_referrals_count(user_id)
-        min_withdraw = db.get_setting_float('MIN_WITHDRAW_GMP')
-        min_refs = db.get_setting_int('MIN_REFERRALS_FOR_WITHDRAW')
+        min_withdraw = Config.MIN_WITHDRAW_GMP
+        min_refs = Config.MIN_REFERRALS_FOR_WITHDRAW
         if referrals < min_refs:
             bot.answer_callback_query(
                 call.id,
@@ -1123,7 +1150,7 @@ def callback_handler(call):
 
     if call.data == "open_case":
         last_open = db.get_last_case_open(user_id)
-        cooldown_minutes = db.get_setting_int('CASE_COOLDOWN_MINUTES')
+        cooldown_minutes = Config.CASE_COOLDOWN_MINUTES
         if last_open:
             try:
                 last_open_dt = datetime.strptime(last_open, '%Y-%m-%d %H:%M:%S')
@@ -1136,15 +1163,15 @@ def callback_handler(call):
                     return
             except:
                 pass
-        min_reward = db.get_setting_int('MIN_CASE_REWARD')
-        max_reward = db.get_setting_int('MAX_CASE_REWARD')
+        min_reward = Config.MIN_CASE_REWARD
+        max_reward = Config.MAX_CASE_REWARD
         reward = random.randint(min_reward, max_reward)
         db.update_bonus_balance(user_id, reward, f"Кейс: +{reward} GMP")
         db.update_last_case_open(user_id)
         user = db.get_user(user_id)
         if user and user['referrer_id']:
             referrer_id = user['referrer_id']
-            referral_percent = db.get_setting_float('REFERRAL_PERCENT')
+            referral_percent = Config.REFERRAL_PERCENT
             referral_earnings = reward * (referral_percent / 100)
             db.update_bonus_balance(referrer_id, referral_earnings, f"Реферал: +{referral_earnings:.2f} GMP")
             db.add_referral_earnings(referrer_id, referral_earnings)
@@ -1198,10 +1225,10 @@ def callback_handler(call):
             "📋 <b>Как это работает:</b>\n"
             "1️⃣ Отправь ссылку другу\n"
             "2️⃣ Друг переходит по ней и регистрируется\n"
-            f"3️⃣ Ты получаешь <b>{db.get_setting_float('REFERRAL_PERCENT')}%</b> от его кейсов!\n\n"
+            f"3️⃣ Ты получаешь <b>{Config.REFERRAL_PERCENT}%</b> от его кейсов!\n\n"
             f"👥 Приглашено: <b>{referrals}</b>\n"
             f"💵 Заработано: <b>{referral_earnings:.2f} GMP</b>\n"
-            f"🎯 Нужно для вывода: <b>{db.get_setting_int('MIN_REFERRALS_FOR_WITHDRAW')}</b>\n\n"
+            f"🎯 Нужно для вывода: <b>{Config.MIN_REFERRALS_FOR_WITHDRAW}</b>\n\n"
             "🔥 Приглашай друзей и зарабатывай!"
         )
         try:
@@ -1225,7 +1252,7 @@ def callback_handler(call):
             "📋 <b>Инструкция:</b>\n"
             "1️⃣ Скопируй ссылку\n"
             "2️⃣ Отправь другу\n"
-            f"3️⃣ Получай <b>{db.get_setting_float('REFERRAL_PERCENT')}%</b> от его открытых кейсов!\n\n"
+            f"3️⃣ Получай <b>{Config.REFERRAL_PERCENT}%</b> от его открытых кейсов!\n\n"
             "🔥 Чем больше друзей, тем больше заработок!",
             parse_mode="HTML"
         )
@@ -1248,9 +1275,9 @@ def callback_handler(call):
 
     # ====== РУБЛИ ======
     if call.data == "rubles":
-        price = db.get_setting_float('PRICE_PER_GMP_RUB')
-        min_rub = db.get_setting_float('MIN_RUB_AMOUNT')
-        max_rub = db.get_setting_float('MAX_RUB_AMOUNT')
+        price = Config.PRICE_PER_GMP_RUB
+        min_rub = Config.MIN_RUB_AMOUNT
+        max_rub = Config.MAX_RUB_AMOUNT
         text = (
             "💳 <b>Пополнение банковской картой</b>\n\n"
             f"💰 Цена 1 GMP = <b>{price:.2f} ₽</b>\n"
@@ -1316,18 +1343,30 @@ def callback_handler(call):
         if not is_admin(user_id):
             bot.answer_callback_query(call.id, "⛔ У вас нет прав!", show_alert=True)
             return
+        # Получаем текущие значения для отображения
+        price = db.get_setting('PRICE_PER_GMP_RUB') or Config.PRICE_PER_GMP_RUB
+        min_rub = db.get_setting('MIN_RUB_AMOUNT') or Config.MIN_RUB_AMOUNT
+        max_rub = db.get_setting('MAX_RUB_AMOUNT') or Config.MAX_RUB_AMOUNT
+        min_withdraw = db.get_setting('MIN_WITHDRAW_GMP') or Config.MIN_WITHDRAW_GMP
+        min_refs = db.get_setting('MIN_REFERRALS_FOR_WITHDRAW') or Config.MIN_REFERRALS_FOR_WITHDRAW
+        ref_percent = db.get_setting('REFERRAL_PERCENT') or Config.REFERRAL_PERCENT
+        cooldown = db.get_setting('CASE_COOLDOWN_MINUTES') or Config.CASE_COOLDOWN_MINUTES
+        min_case = db.get_setting('MIN_CASE_REWARD') or Config.MIN_CASE_REWARD
+        max_case = db.get_setting('MAX_CASE_REWARD') or Config.MAX_CASE_REWARD
+
         text = (
             "💱 <b>Настройки бота</b>\n\n"
-            "Введите номер параметра для изменения:\n"
-            "1 - Цена 1 GMP (₽)\n"
-            "2 - Мин. сумма пополнения (₽)\n"
-            "3 - Макс. сумма пополнения (₽)\n"
-            "4 - Мин. сумма вывода (GMP)\n"
-            "5 - Кол-во рефералов для вывода\n"
-            "6 - % реферальных начислений\n"
-            "7 - Время кулдауна кейса (мин)\n"
-            "8 - Мин. награда кейса (GMP)\n"
-            "9 - Макс. награда кейса (GMP)"
+            f"Текущие значения:\n"
+            f"1 - Цена 1 GMP: {price} ₽\n"
+            f"2 - Мин. сумма пополнения: {min_rub} ₽\n"
+            f"3 - Макс. сумма пополнения: {max_rub} ₽\n"
+            f"4 - Мин. сумма вывода: {min_withdraw} GMP\n"
+            f"5 - Кол-во рефералов для вывода: {min_refs}\n"
+            f"6 - % реферальных начислений: {ref_percent}\n"
+            f"7 - Время кулдауна кейса: {cooldown} мин\n"
+            f"8 - Мин. награда кейса: {min_case} GMP\n"
+            f"9 - Макс. награда кейса: {max_case} GMP\n\n"
+            "Введите номер параметра для изменения (1-9):"
         )
         try:
             bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=back_to_main_keyboard())
@@ -1445,11 +1484,6 @@ def callback_handler(call):
         if not order:
             bot.answer_callback_query(call.id, "❌ Заявка не найдена")
             return
-        # Получаем актуальные реквизиты карты из БД для отображения
-        card_num = db.get_setting('CARD_NUMBER')
-        bank = db.get_setting('BANK_NAME')
-        recipient = db.get_setting('RECIPIENT_NAME')
-        phone = db.get_setting('PHONE_NUMBER')
         text = (
             "📸 <b>Отправьте скриншот оплаты</b>\n\n"
             "✅ Убедитесь, что на скриншоте видно:\n"
@@ -1531,7 +1565,7 @@ def callback_handler(call):
             cur.execute('SELECT COUNT(*) FROM banned_users')
             total_banned = cur.fetchone()[0] or 0
             conn.close()
-            price = db.get_setting_float('PRICE_PER_GMP_RUB')
+            price = Config.PRICE_PER_GMP_RUB
             text = (
                 "📊 <b>Статистика бота</b>\n\n"
                 f"👥 Пользователей: <b>{total_users}</b>\n"
@@ -1744,6 +1778,8 @@ def handle_admin_card_value(message, key, desc):
         bot.send_message(chat_id, "❌ Значение не может быть пустым.", parse_mode="HTML")
         return
     db.set_setting(key, new_val)
+    # Синхронизируем Config после изменения
+    sync_config_from_db()
     bot.send_message(chat_id, f"✅ <b>{desc}</b> успешно изменён на <b>{new_val}</b>", parse_mode="HTML")
     show_main_menu(chat_id)
 
@@ -1797,6 +1833,8 @@ def handle_admin_settings_value(message, key, conv, desc):
         bot.send_message(chat_id, f"❌ Некорректное значение. Введите положительное {desc}.", parse_mode="HTML")
         return
     db.set_setting(key, new_val)
+    # Синхронизируем Config после изменения
+    sync_config_from_db()
     bot.send_message(chat_id, f"✅ <b>{desc}</b> успешно изменено на <b>{new_val}</b>", parse_mode="HTML")
     show_main_menu(chat_id)
 
@@ -1863,7 +1901,7 @@ def handle_withdraw_amount(message):
         return
     try:
         amount = float(message.text.replace(',', '.'))
-        min_withdraw = db.get_setting_float('MIN_WITHDRAW_GMP')
+        min_withdraw = Config.MIN_WITHDRAW_GMP
         if amount < min_withdraw:
             bot.send_message(
                 chat_id,
@@ -1953,8 +1991,8 @@ def handle_rubles_amount(message):
         return
     try:
         amount = float(message.text.replace(',', '.'))
-        min_rub = db.get_setting_float('MIN_RUB_AMOUNT')
-        max_rub = db.get_setting_float('MAX_RUB_AMOUNT')
+        min_rub = Config.MIN_RUB_AMOUNT
+        max_rub = Config.MAX_RUB_AMOUNT
         if amount < min_rub:
             bot.send_message(
                 chat_id,
@@ -1973,10 +2011,10 @@ def handle_rubles_amount(message):
             )
             bot.register_next_step_handler(message, handle_rubles_amount)
             return
-        price = db.get_setting_float('PRICE_PER_GMP_RUB')
+        price = Config.PRICE_PER_GMP_RUB
         gmp = amount / price
         order_id = db.create_order(user_id, "rubles", amount, gmp)
-        # Получаем актуальные реквизиты карты
+        # Получаем актуальные реквизиты карты из БД или Config
         card_num = db.get_setting('CARD_NUMBER') or Config.CARD_NUMBER
         bank = db.get_setting('BANK_NAME') or Config.BANK_NAME
         recipient = db.get_setting('RECIPIENT_NAME') or Config.RECIPIENT_NAME
@@ -2172,16 +2210,19 @@ def handle_unban_user(message):
 
 # ========== ЗАПУСК БОТА ==========
 if __name__ == "__main__":
+    # Синхронизируем конфигурацию перед запуском
+    sync_config_from_db()
+
     print("=" * 60)
     print("🤖 BRAWL AKIM GMP BOT v3.0")
     print("=" * 60)
     print(f"📢 Канал: {Config.CHANNEL_LINK}")
     print(f"📢 Отзывы: {Config.REVIEWS_LINK}")
     print(f"👨‍💻 Админ ID: {Config.ADMIN_ID}")
-    print(f"💰 Цена 1 GMP: {db.get_setting_float('PRICE_PER_GMP_RUB'):.2f} ₽")
-    print(f"🎁 Кейс каждые: {db.get_setting_int('CASE_COOLDOWN_MINUTES')} мин")
-    print(f"🎯 Кейс: {db.get_setting_int('MIN_CASE_REWARD')}-{db.get_setting_int('MAX_CASE_REWARD')} GMP")
-    print(f"👥 Рефералов для вывода: {db.get_setting_int('MIN_REFERRALS_FOR_WITHDRAW')}")
+    print(f"💰 Цена 1 GMP: {Config.PRICE_PER_GMP_RUB:.2f} ₽")
+    print(f"🎁 Кейс каждые: {Config.CASE_COOLDOWN_MINUTES} мин")
+    print(f"🎯 Кейс: {Config.MIN_CASE_REWARD}-{Config.MAX_CASE_REWARD} GMP")
+    print(f"👥 Рефералов для вывода: {Config.MIN_REFERRALS_FOR_WITHDRAW}")
     print("=" * 60)
     print("🔄 Бот запущен и готов к работе!")
     print("=" * 60)
