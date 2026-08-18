@@ -36,24 +36,24 @@ class Config:
     BOT_USERNAME = "@Sale_gmpbot"
 
     # Начальные значения (будут перезаписаны из БД)
-    PRICE_PER_GMP_RUB = 0.67          # цена 1 GMP в рублях
-    MIN_RUB_AMOUNT = 50
+    PRICE_PER_GMP_RUB = 0.3         # цена 1 GMP в рублях
+    MIN_RUB_AMOUNT = 1
     MAX_RUB_AMOUNT = 50000
 
     # Реквизиты карты (начальные, будут перезаписаны из БД)
-    CARD_NUMBER = "4100119356378762"
-    PHONE_NUMBER = "+7 908 652 31 55"
-    BANK_NAME = "Yoomoney"
-    RECIPIENT_NAME = "Иван Юрьевич Д."
+    CARD_NUMBER = "0"
+    PHONE_NUMBER = "+7 920 008 91 84"
+    BANK_NAME = "озон банк"
+    RECIPIENT_NAME = "Тимофей Дмитриевич Р."
 
     DB_PATH = "bot_database.db"
     NAZVANIA = "GMP от owner"
 
     CASE_COOLDOWN_MINUTES = 1440
     MIN_CASE_REWARD = 1
-    MAX_CASE_REWARD = 3
+    MAX_CASE_REWARD = 2
     MIN_WITHDRAW_GMP = 20
-    MIN_REFERRALS_FOR_WITHDRAW = 10
+    MIN_REFERRALS_FOR_WITHDRAW = 1
     REFERRAL_PERCENT = 10
 
 
