@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 # ========== КОНФИГУРАЦИЯ ==========
 class Config:
-    BOT_TOKEN = "8918094777:AAH6bDZoH8PcSnuj0STi8ycKu7zk8HSHFz8"  # ЗАМЕНИТЕ НА РАБОЧИЙ ТОКЕН
+    BOT_TOKEN = "8918094777:AAH6bDZoH8PcSnuj0STi8ycKu7zk8HSHFz8"
     ADMIN_ID = 5356400377
 
     CHANNEL_LINK = "https://t.me/gmp_owner"
@@ -36,13 +36,12 @@ class Config:
     SUPPORT_LINK = "@hjklgf1"
     BOT_USERNAME = "@Sale_gmpbot"
 
-    # Начальные значения (будут перезаписаны из БД при запуске)
+    # Начальные значения (будут перезаписаны из БД)
     PRICE_PER_GMP_RUB = 0.3
     MIN_RUB_AMOUNT = 1
     MAX_RUB_AMOUNT = 50000
-    TOTAL_GMP_AVAILABLE = 1000  # общее количество GMP для продажи
+    TOTAL_GMP_AVAILABLE = 1000
 
-    # Реквизиты карты
     CARD_NUMBER = "0"
     PHONE_NUMBER = "+7 920 008 91 84"
     BANK_NAME = "озон банк"
@@ -56,7 +55,7 @@ class Config:
     MAX_CASE_REWARD = 2
     MIN_WITHDRAW_GMP = 20
     MIN_REFERRALS_FOR_WITHDRAW = 1
-    REFERRAL_PERCENT = 10  # процент от покупок рефералов
+    REFERRAL_PERCENT = 10
 
 
 class Database:
@@ -192,6 +191,7 @@ class Database:
         conn.close()
 
     def init_settings(self):
+        """Инициализирует настройки со значениями по умолчанию, если их нет"""
         defaults = {
             'PRICE_PER_GMP_RUB': str(Config.PRICE_PER_GMP_RUB),
             'MIN_RUB_AMOUNT': str(Config.MIN_RUB_AMOUNT),
@@ -554,8 +554,9 @@ db = Database(Config.DB_PATH)
 bot = telebot.TeleBot(Config.BOT_TOKEN)
 BOT_ID = None
 
-def sync_config_from_db():
-    """Синхронизирует переменные Config со значениями из базы данных"""
+# ========== ФУНКЦИЯ ЗАГРУЗКИ НАСТРОЕК ИЗ БД ==========
+def load_settings_from_db():
+    """Загружает все настройки из базы данных в Config"""
     global Config
     try:
         Config.PRICE_PER_GMP_RUB = db.get_setting_float('PRICE_PER_GMP_RUB')
@@ -574,10 +575,35 @@ def sync_config_from_db():
         Config.BANK_NAME = db.get_setting('BANK_NAME') or Config.BANK_NAME
         Config.RECIPIENT_NAME = db.get_setting('RECIPIENT_NAME') or Config.RECIPIENT_NAME
         
-        logger.info("Конфигурация синхронизирована с базой данных")
+        logger.info("Настройки загружены из базы данных")
         return True
     except Exception as e:
-        logger.error(f"Ошибка синхронизации конфигурации: {e}")
+        logger.error(f"Ошибка загрузки настроек: {e}")
+        return False
+
+# ========== ФУНКЦИЯ СОХРАНЕНИЯ НАСТРОЕК В БД ==========
+def save_settings_to_db():
+    """Сохраняет все настройки из Config в базу данных"""
+    try:
+        db.set_setting('PRICE_PER_GMP_RUB', Config.PRICE_PER_GMP_RUB)
+        db.set_setting('MIN_RUB_AMOUNT', Config.MIN_RUB_AMOUNT)
+        db.set_setting('MAX_RUB_AMOUNT', Config.MAX_RUB_AMOUNT)
+        db.set_setting('MIN_WITHDRAW_GMP', Config.MIN_WITHDRAW_GMP)
+        db.set_setting('MIN_REFERRALS_FOR_WITHDRAW', Config.MIN_REFERRALS_FOR_WITHDRAW)
+        db.set_setting('REFERRAL_PERCENT', Config.REFERRAL_PERCENT)
+        db.set_setting('CASE_COOLDOWN_MINUTES', Config.CASE_COOLDOWN_MINUTES)
+        db.set_setting('MIN_CASE_REWARD', Config.MIN_CASE_REWARD)
+        db.set_setting('MAX_CASE_REWARD', Config.MAX_CASE_REWARD)
+        db.set_setting('TOTAL_GMP_AVAILABLE', Config.TOTAL_GMP_AVAILABLE)
+        db.set_setting('CARD_NUMBER', Config.CARD_NUMBER)
+        db.set_setting('PHONE_NUMBER', Config.PHONE_NUMBER)
+        db.set_setting('BANK_NAME', Config.BANK_NAME)
+        db.set_setting('RECIPIENT_NAME', Config.RECIPIENT_NAME)
+        
+        logger.info("Настройки сохранены в базу данных")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка сохранения настроек: {e}")
         return False
 
 def get_bot_id():
@@ -652,7 +678,6 @@ def format_time_remaining(seconds):
     return " ".join(parts) if parts else "0 с."
 
 def floor_gmp(value):
-    """Округляет значение GMP вниз до целого"""
     return math.floor(value)
 
 # ========== ФУНКЦИЯ ПОКАЗА БАЛАНСА ==========
@@ -768,7 +793,7 @@ def reviews_keyboard():
     keyboard.add(btn1, btn2)
     return keyboard
 
-def admin_confirm_keyboard(order_id, screenshot_file_id=None):
+def admin_confirm_keyboard(order_id):
     keyboard = types.InlineKeyboardMarkup(row_width=2)
     btn_confirm = types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"admin_confirm_{order_id}")
     btn_cancel = types.InlineKeyboardButton("❌ Отменить", callback_data=f"admin_cancel_{order_id}")
@@ -1267,7 +1292,6 @@ def callback_handler(call):
 
     # ====== ПОКУПКА GMP ======
     if call.data == "buy_gmp":
-        # Проверяем доступное количество GMP
         available = Config.TOTAL_GMP_AVAILABLE
         if available <= 0:
             bot.answer_callback_query(call.id, "❌ К сожалению, GMP временно нет в наличии!", show_alert=True)
@@ -1287,7 +1311,6 @@ def callback_handler(call):
 
     # ====== РУБЛИ ======
     if call.data == "rubles":
-        # Проверяем доступное количество GMP перед запросом суммы
         available = Config.TOTAL_GMP_AVAILABLE
         if available <= 0:
             bot.answer_callback_query(call.id, "❌ GMP временно нет в наличии!", show_alert=True)
@@ -1361,7 +1384,6 @@ def callback_handler(call):
         if not is_admin(user_id):
             bot.answer_callback_query(call.id, "⛔ У вас нет прав!", show_alert=True)
             return
-        # Получаем текущие значения из Config (уже синхронизированы)
         price = Config.PRICE_PER_GMP_RUB
         min_rub = Config.MIN_RUB_AMOUNT
         max_rub = Config.MAX_RUB_AMOUNT
@@ -1521,7 +1543,7 @@ def callback_handler(call):
         bot.register_next_step_handler(call.message, handle_rubles_screenshot, order_id)
         return
 
-    # ========== АДМИН: ЗАЯВКИ (ОБНОВЛЁННЫЙ РАЗДЕЛ) ==========
+    # ========== АДМИН: ЗАЯВКИ ==========
     if call.data.startswith("admin_orders"):
         if not is_admin(user_id):
             bot.answer_callback_query(call.id, "⛔ У вас нет прав!", show_alert=True)
@@ -1538,7 +1560,6 @@ def callback_handler(call):
                     bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=admin_orders_keyboard())
                 return
             else:
-                # Создаём клавиатуру с кнопками для каждой заявки
                 text = f"📋 <b>Заявки на пополнение ({len(pending_orders)})</b>\n\n"
                 keyboard = types.InlineKeyboardMarkup(row_width=2)
                 for order in pending_orders:
@@ -1557,7 +1578,6 @@ def callback_handler(call):
                     bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=keyboard)
                 return
 
-        # Просмотр конкретной заявки
         if call.data.startswith("admin_order_view_"):
             order_id = int(call.data.split("_")[3])
             order = db.get_order(order_id)
@@ -1591,7 +1611,6 @@ def callback_handler(call):
                 bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=keyboard)
             return
 
-        # Просмотр скриншота
         if call.data.startswith("admin_order_screenshot_"):
             order_id = int(call.data.split("_")[3])
             order = db.get_order(order_id)
@@ -1602,7 +1621,6 @@ def callback_handler(call):
             if not screenshot_file_id:
                 bot.answer_callback_query(call.id, "❌ Скриншот не найден", show_alert=True)
                 return
-            # Отправляем фото админу
             try:
                 bot.send_photo(chat_id, screenshot_file_id, caption=f"🖼 Скриншот к заявке #{order_id}")
                 bot.answer_callback_query(call.id, "✅ Скриншот отправлен")
@@ -1703,26 +1721,23 @@ def callback_handler(call):
         bot.register_next_step_handler(call.message, handle_broadcast)
         return
 
-    # ========== АДМИН: ПОДТВЕРЖДЕНИЕ ПОПОЛНЕНИЯ (с учётом склада и рефералов) ==========
+    # ========== АДМИН: ПОДТВЕРЖДЕНИЕ ПОПОЛНЕНИЯ ==========
     if call.data.startswith("admin_confirm_"):
         order_id = int(call.data.split("_")[2])
         order = db.get_order(order_id)
         if not order:
             bot.answer_callback_query(call.id, "❌ Заявка не найдена")
             return
-        # Проверяем наличие GMP на складе
         if Config.TOTAL_GMP_AVAILABLE < order['gmp_amount']:
             bot.answer_callback_query(call.id, f"❌ Недостаточно GMP на складе! Доступно: {Config.TOTAL_GMP_AVAILABLE:.0f}", show_alert=True)
             return
-        # Подтверждаем заказ
+        
         user_id_order = order['user_id']
         user = db.get_user(user_id_order)
         username = f"@{user['username']}" if user and user['username'] else f"ID: {user_id_order}"
         
-        # Обновляем статус заказа
         db.update_order_status(order_id, "confirmed")
         
-        # Увеличиваем счётчик заказов пользователя
         conn = sqlite3.connect(Config.DB_PATH)
         cur = conn.cursor()
         cur.execute('UPDATE users SET orders_count = orders_count + 1 WHERE user_id = ?', (user_id_order,))
@@ -1730,11 +1745,10 @@ def callback_handler(call):
         conn.close()
         
         # Списываем GMP со склада
-        new_available = Config.TOTAL_GMP_AVAILABLE - order['gmp_amount']
-        db.set_setting('TOTAL_GMP_AVAILABLE', new_available)
-        sync_config_from_db()  # обновляем Config
+        Config.TOTAL_GMP_AVAILABLE = Config.TOTAL_GMP_AVAILABLE - order['gmp_amount']
+        db.set_setting('TOTAL_GMP_AVAILABLE', Config.TOTAL_GMP_AVAILABLE)
         
-        # Начисляем реферальный бонус, если есть реферер
+        # Реферальный бонус
         if user and user['referrer_id']:
             referrer_id = user['referrer_id']
             referral_percent = Config.REFERRAL_PERCENT
@@ -1752,7 +1766,6 @@ def callback_handler(call):
                 except:
                     pass
         
-        # Удаляем сообщение админа с заявкой, если есть
         admin_msg_id = order['admin_message_id'] if order['admin_message_id'] else None
         if admin_msg_id:
             safe_delete_message(Config.ADMIN_ID, admin_msg_id)
@@ -1760,7 +1773,6 @@ def callback_handler(call):
         if user_msg_id:
             safe_delete_message(user_id_order, user_msg_id)
         
-        # Уведомляем пользователя
         try:
             if not is_bot_itself(user_id_order):
                 text = (
@@ -1773,7 +1785,6 @@ def callback_handler(call):
             logger.error(f"Не удалось уведомить пользователя {user_id_order}: {e}")
         
         bot.answer_callback_query(call.id, "✅ Заявка подтверждена!")
-        # Обновляем сообщение в админ-панели (закрываем просмотр)
         safe_edit_or_send(
             call.message.chat.id,
             call.message.message_id,
@@ -1929,7 +1940,8 @@ def handle_admin_card_value(message, key, desc):
         bot.send_message(chat_id, "❌ Значение не может быть пустым.", parse_mode="HTML")
         return
     db.set_setting(key, new_val)
-    sync_config_from_db()
+    # Обновляем Config
+    setattr(Config, key, new_val)
     bot.send_message(chat_id, f"✅ <b>{desc}</b> успешно изменён на <b>{new_val}</b>", parse_mode="HTML")
     show_main_menu(chat_id)
 
@@ -1959,7 +1971,7 @@ def handle_admin_settings_choice(message):
         10: ('TOTAL_GMP_AVAILABLE', 'Доступно GMP', 'число', float)
     }
     key, desc, type_desc, conv = settings_map[choice]
-    current = db.get_setting(key)
+    current = getattr(Config, key)
     msg = bot.send_message(
         chat_id,
         f"💱 <b>Изменение: {desc}</b>\n\n"
@@ -1982,8 +1994,10 @@ def handle_admin_settings_value(message, key, conv, desc):
     except:
         bot.send_message(chat_id, f"❌ Некорректное значение. Введите положительное {desc}.", parse_mode="HTML")
         return
+    # Сохраняем в БД
     db.set_setting(key, new_val)
-    sync_config_from_db()
+    # Обновляем Config
+    setattr(Config, key, new_val)
     bot.send_message(chat_id, f"✅ <b>{desc}</b> успешно изменено на <b>{new_val}</b>", parse_mode="HTML")
     show_main_menu(chat_id)
 
@@ -2162,7 +2176,6 @@ def handle_rubles_amount(message):
             return
         price = Config.PRICE_PER_GMP_RUB
         gmp = amount / price
-        # Проверяем доступное количество GMP
         if gmp > Config.TOTAL_GMP_AVAILABLE:
             bot.send_message(
                 chat_id,
@@ -2174,7 +2187,6 @@ def handle_rubles_amount(message):
             bot.register_next_step_handler(message, handle_rubles_amount)
             return
         order_id = db.create_order(user_id, "rubles", amount, gmp)
-        # Получаем актуальные реквизиты карты из БД или Config
         card_num = db.get_setting('CARD_NUMBER') or Config.CARD_NUMBER
         bank = db.get_setting('BANK_NAME') or Config.BANK_NAME
         recipient = db.get_setting('RECIPIENT_NAME') or Config.RECIPIENT_NAME
@@ -2220,7 +2232,6 @@ def handle_rubles_screenshot(message, order_id):
     if not order:
         bot.send_message(chat_id, "❌ Заявка не найдена")
         return
-    # Сохраняем file_id скриншота в заказе
     screenshot_file_id = message.photo[-1].file_id
     db.update_order_status(order_id, status='pending', screenshot_file_id=screenshot_file_id)
     
@@ -2228,7 +2239,6 @@ def handle_rubles_screenshot(message, order_id):
     username = f"@{user['username']}" if user and user['username'] else f"ID: {user_id}"
     gmp_amount = order['gmp_amount']
     gmp_floor = floor_gmp(gmp_amount)
-    # Формируем caption для админа: "перевод {gmp_floor} @username" (без GMP)
     caption = (
         f"💳 <b>Перевод {gmp_floor} @{user['username'] if user and user['username'] else user_id}</b>\n"
         f"{divider()}\n"
@@ -2378,7 +2388,9 @@ def handle_unban_user(message):
 
 # ========== ЗАПУСК БОТА ==========
 if __name__ == "__main__":
-    sync_config_from_db()
+    # Загружаем настройки из БД при запуске
+    load_settings_from_db()
+    
     print("=" * 60)
     print("🤖 BRAWL AKIM GMP BOT v3.0")
     print("=" * 60)
