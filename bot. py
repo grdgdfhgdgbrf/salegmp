@@ -36,7 +36,7 @@ class Config:
     SUPPORT_LINK = "@hjklgf1"
     BOT_USERNAME = "@Sale_gmpbot"
 
-    # Начальные значения (будут перезаписаны из БД)
+    # Начальные значения (будут перезаписаны из БД при запуске)
     PRICE_PER_GMP_RUB = 0.3
     MIN_RUB_AMOUNT = 1
     MAX_RUB_AMOUNT = 50000
@@ -169,29 +169,65 @@ class Database:
         logger.info("База данных инициализирована")
 
     def migrate_db(self):
+        """Миграция для старых версий базы данных"""
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
 
+        # Проверяем и добавляем колонки в users
         cur.execute("PRAGMA table_info(users)")
         columns = [col[1] for col in cur.fetchall()]
 
         if 'total_withdrawn' not in columns:
             cur.execute("ALTER TABLE users ADD COLUMN total_withdrawn REAL DEFAULT 0")
+            logger.info("Добавлена колонка total_withdrawn в users")
         if 'referral_earnings' not in columns:
             cur.execute("ALTER TABLE users ADD COLUMN referral_earnings REAL DEFAULT 0")
+            logger.info("Добавлена колонка referral_earnings в users")
         if 'last_case_open' not in columns:
             cur.execute("ALTER TABLE users ADD COLUMN last_case_open TIMESTAMP DEFAULT NULL")
+            logger.info("Добавлена колонка last_case_open в users")
 
+        # Проверяем колонки в banned_users
         cur.execute("PRAGMA table_info(banned_users)")
         columns = [col[1] for col in cur.fetchall()]
         if 'banned_by' not in columns:
             cur.execute("ALTER TABLE banned_users ADD COLUMN banned_by INTEGER DEFAULT NULL")
+            logger.info("Добавлена колонка banned_by в banned_users")
+
+        # Проверяем наличие новых настроек в settings
+        cur.execute("SELECT key FROM settings")
+        existing_keys = [row[0] for row in cur.fetchall()]
+
+        # Список всех необходимых настроек
+        all_settings = {
+            'PRICE_PER_GMP_RUB': str(Config.PRICE_PER_GMP_RUB),
+            'MIN_RUB_AMOUNT': str(Config.MIN_RUB_AMOUNT),
+            'MAX_RUB_AMOUNT': str(Config.MAX_RUB_AMOUNT),
+            'MIN_WITHDRAW_GMP': str(Config.MIN_WITHDRAW_GMP),
+            'MIN_REFERRALS_FOR_WITHDRAW': str(Config.MIN_REFERRALS_FOR_WITHDRAW),
+            'REFERRAL_PERCENT': str(Config.REFERRAL_PERCENT),
+            'CASE_COOLDOWN_MINUTES': str(Config.CASE_COOLDOWN_MINUTES),
+            'MIN_CASE_REWARD': str(Config.MIN_CASE_REWARD),
+            'MAX_CASE_REWARD': str(Config.MAX_CASE_REWARD),
+            'CARD_NUMBER': Config.CARD_NUMBER,
+            'PHONE_NUMBER': Config.PHONE_NUMBER,
+            'BANK_NAME': Config.BANK_NAME,
+            'RECIPIENT_NAME': Config.RECIPIENT_NAME,
+            'TOTAL_GMP_AVAILABLE': str(Config.TOTAL_GMP_AVAILABLE)
+        }
+
+        # Добавляем отсутствующие настройки
+        for key, value in all_settings.items():
+            if key not in existing_keys:
+                cur.execute('INSERT INTO settings (key, value) VALUES (?, ?)', (key, value))
+                logger.info(f"Добавлена настройка {key} = {value}")
 
         conn.commit()
         conn.close()
+        logger.info("Миграция базы данных завершена")
 
     def init_settings(self):
-        """Инициализирует настройки со значениями по умолчанию, если их нет"""
+        """Инициализация настроек (вызывается только при создании новой БД)"""
         defaults = {
             'PRICE_PER_GMP_RUB': str(Config.PRICE_PER_GMP_RUB),
             'MIN_RUB_AMOUNT': str(Config.MIN_RUB_AMOUNT),
@@ -217,6 +253,7 @@ class Database:
         logger.info("Настройки инициализированы")
 
     def get_setting(self, key):
+        """Получить значение настройки как строку"""
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
         cur.execute('SELECT value FROM settings WHERE key = ?', (key,))
@@ -225,14 +262,25 @@ class Database:
         return result[0] if result else None
 
     def get_setting_float(self, key):
+        """Получить значение настройки как float"""
         val = self.get_setting(key)
-        return float(val) if val is not None else 0.0
+        try:
+            return float(val) if val is not None else 0.0
+        except ValueError:
+            logger.error(f"Ошибка преобразования {key} = {val} в float")
+            return 0.0
 
     def get_setting_int(self, key):
+        """Получить значение настройки как int"""
         val = self.get_setting(key)
-        return int(val) if val is not None else 0
+        try:
+            return int(val) if val is not None else 0
+        except ValueError:
+            logger.error(f"Ошибка преобразования {key} = {val} в int")
+            return 0
 
     def set_setting(self, key, value):
+        """Установить значение настройки"""
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
         cur.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', (key, str(value)))
@@ -554,11 +602,11 @@ db = Database(Config.DB_PATH)
 bot = telebot.TeleBot(Config.BOT_TOKEN)
 BOT_ID = None
 
-# ========== ФУНКЦИЯ ЗАГРУЗКИ НАСТРОЕК ИЗ БД ==========
-def load_settings_from_db():
-    """Загружает все настройки из базы данных в Config"""
+def sync_config_from_db():
+    """Синхронизирует все переменные Config со значениями из базы данных"""
     global Config
     try:
+        # Основные настройки
         Config.PRICE_PER_GMP_RUB = db.get_setting_float('PRICE_PER_GMP_RUB')
         Config.MIN_RUB_AMOUNT = db.get_setting_float('MIN_RUB_AMOUNT')
         Config.MAX_RUB_AMOUNT = db.get_setting_float('MAX_RUB_AMOUNT')
@@ -570,40 +618,17 @@ def load_settings_from_db():
         Config.MAX_CASE_REWARD = db.get_setting_int('MAX_CASE_REWARD')
         Config.TOTAL_GMP_AVAILABLE = db.get_setting_float('TOTAL_GMP_AVAILABLE')
         
+        # Реквизиты карты
         Config.CARD_NUMBER = db.get_setting('CARD_NUMBER') or Config.CARD_NUMBER
         Config.PHONE_NUMBER = db.get_setting('PHONE_NUMBER') or Config.PHONE_NUMBER
         Config.BANK_NAME = db.get_setting('BANK_NAME') or Config.BANK_NAME
         Config.RECIPIENT_NAME = db.get_setting('RECIPIENT_NAME') or Config.RECIPIENT_NAME
         
-        logger.info("Настройки загружены из базы данных")
+        logger.info("Конфигурация синхронизирована с базой данных")
+        logger.info(f"Текущие настройки: PRICE={Config.PRICE_PER_GMP_RUB}, AVAILABLE={Config.TOTAL_GMP_AVAILABLE}")
         return True
     except Exception as e:
-        logger.error(f"Ошибка загрузки настроек: {e}")
-        return False
-
-# ========== ФУНКЦИЯ СОХРАНЕНИЯ НАСТРОЕК В БД ==========
-def save_settings_to_db():
-    """Сохраняет все настройки из Config в базу данных"""
-    try:
-        db.set_setting('PRICE_PER_GMP_RUB', Config.PRICE_PER_GMP_RUB)
-        db.set_setting('MIN_RUB_AMOUNT', Config.MIN_RUB_AMOUNT)
-        db.set_setting('MAX_RUB_AMOUNT', Config.MAX_RUB_AMOUNT)
-        db.set_setting('MIN_WITHDRAW_GMP', Config.MIN_WITHDRAW_GMP)
-        db.set_setting('MIN_REFERRALS_FOR_WITHDRAW', Config.MIN_REFERRALS_FOR_WITHDRAW)
-        db.set_setting('REFERRAL_PERCENT', Config.REFERRAL_PERCENT)
-        db.set_setting('CASE_COOLDOWN_MINUTES', Config.CASE_COOLDOWN_MINUTES)
-        db.set_setting('MIN_CASE_REWARD', Config.MIN_CASE_REWARD)
-        db.set_setting('MAX_CASE_REWARD', Config.MAX_CASE_REWARD)
-        db.set_setting('TOTAL_GMP_AVAILABLE', Config.TOTAL_GMP_AVAILABLE)
-        db.set_setting('CARD_NUMBER', Config.CARD_NUMBER)
-        db.set_setting('PHONE_NUMBER', Config.PHONE_NUMBER)
-        db.set_setting('BANK_NAME', Config.BANK_NAME)
-        db.set_setting('RECIPIENT_NAME', Config.RECIPIENT_NAME)
-        
-        logger.info("Настройки сохранены в базу данных")
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка сохранения настроек: {e}")
+        logger.error(f"Ошибка синхронизации конфигурации: {e}")
         return False
 
 def get_bot_id():
@@ -615,7 +640,10 @@ def get_bot_id():
             BOT_ID = 0
     return BOT_ID
 
-# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+def floor_gmp(value):
+    """Округляет значение GMP вниз до целого"""
+    return math.floor(value)
+
 def is_admin(user_id):
     return user_id == Config.ADMIN_ID
 
@@ -676,9 +704,6 @@ def format_time_remaining(seconds):
     if secs > 0:
         parts.append(f"{secs} с.")
     return " ".join(parts) if parts else "0 с."
-
-def floor_gmp(value):
-    return math.floor(value)
 
 # ========== ФУНКЦИЯ ПОКАЗА БАЛАНСА ==========
 def show_balance(chat_id, message_id=None, user_id=None):
@@ -795,9 +820,9 @@ def reviews_keyboard():
 
 def admin_confirm_keyboard(order_id):
     keyboard = types.InlineKeyboardMarkup(row_width=2)
-    btn_confirm = types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"admin_confirm_{order_id}")
-    btn_cancel = types.InlineKeyboardButton("❌ Отменить", callback_data=f"admin_cancel_{order_id}")
-    keyboard.add(btn_confirm, btn_cancel)
+    btn1 = types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"admin_confirm_{order_id}")
+    btn2 = types.InlineKeyboardButton("❌ Отменить", callback_data=f"admin_cancel_{order_id}")
+    keyboard.add(btn1, btn2)
     return keyboard
 
 def admin_withdraw_keyboard(request_id):
@@ -1384,6 +1409,7 @@ def callback_handler(call):
         if not is_admin(user_id):
             bot.answer_callback_query(call.id, "⛔ У вас нет прав!", show_alert=True)
             return
+        # Получаем текущие значения из Config
         price = Config.PRICE_PER_GMP_RUB
         min_rub = Config.MIN_RUB_AMOUNT
         max_rub = Config.MAX_RUB_AMOUNT
@@ -1544,10 +1570,11 @@ def callback_handler(call):
         return
 
     # ========== АДМИН: ЗАЯВКИ ==========
-    if call.data.startswith("admin_orders"):
+    if call.data == "admin_orders" or call.data.startswith("admin_order_view_") or call.data.startswith("admin_order_screenshot_"):
         if not is_admin(user_id):
             bot.answer_callback_query(call.id, "⛔ У вас нет прав!", show_alert=True)
             return
+        
         if call.data == "admin_orders":
             pending_orders = db.get_pending_orders()
             if not pending_orders:
@@ -1728,10 +1755,10 @@ def callback_handler(call):
         if not order:
             bot.answer_callback_query(call.id, "❌ Заявка не найдена")
             return
+        # Проверяем наличие GMP на складе
         if Config.TOTAL_GMP_AVAILABLE < order['gmp_amount']:
             bot.answer_callback_query(call.id, f"❌ Недостаточно GMP на складе! Доступно: {Config.TOTAL_GMP_AVAILABLE:.0f}", show_alert=True)
             return
-        
         user_id_order = order['user_id']
         user = db.get_user(user_id_order)
         username = f"@{user['username']}" if user and user['username'] else f"ID: {user_id_order}"
@@ -1744,11 +1771,12 @@ def callback_handler(call):
         conn.commit()
         conn.close()
         
-        # Списываем GMP со склада
-        Config.TOTAL_GMP_AVAILABLE = Config.TOTAL_GMP_AVAILABLE - order['gmp_amount']
-        db.set_setting('TOTAL_GMP_AVAILABLE', Config.TOTAL_GMP_AVAILABLE)
+        # Списываем GMP со склада и синхронизируем
+        new_available = Config.TOTAL_GMP_AVAILABLE - order['gmp_amount']
+        db.set_setting('TOTAL_GMP_AVAILABLE', new_available)
+        sync_config_from_db()
         
-        # Реферальный бонус
+        # Начисляем реферальный бонус
         if user and user['referrer_id']:
             referrer_id = user['referrer_id']
             referral_percent = Config.REFERRAL_PERCENT
@@ -1940,8 +1968,7 @@ def handle_admin_card_value(message, key, desc):
         bot.send_message(chat_id, "❌ Значение не может быть пустым.", parse_mode="HTML")
         return
     db.set_setting(key, new_val)
-    # Обновляем Config
-    setattr(Config, key, new_val)
+    sync_config_from_db()
     bot.send_message(chat_id, f"✅ <b>{desc}</b> успешно изменён на <b>{new_val}</b>", parse_mode="HTML")
     show_main_menu(chat_id)
 
@@ -1971,7 +1998,7 @@ def handle_admin_settings_choice(message):
         10: ('TOTAL_GMP_AVAILABLE', 'Доступно GMP', 'число', float)
     }
     key, desc, type_desc, conv = settings_map[choice]
-    current = getattr(Config, key)
+    current = db.get_setting(key)
     msg = bot.send_message(
         chat_id,
         f"💱 <b>Изменение: {desc}</b>\n\n"
@@ -1994,10 +2021,8 @@ def handle_admin_settings_value(message, key, conv, desc):
     except:
         bot.send_message(chat_id, f"❌ Некорректное значение. Введите положительное {desc}.", parse_mode="HTML")
         return
-    # Сохраняем в БД
     db.set_setting(key, new_val)
-    # Обновляем Config
-    setattr(Config, key, new_val)
+    sync_config_from_db()
     bot.send_message(chat_id, f"✅ <b>{desc}</b> успешно изменено на <b>{new_val}</b>", parse_mode="HTML")
     show_main_menu(chat_id)
 
@@ -2388,8 +2413,8 @@ def handle_unban_user(message):
 
 # ========== ЗАПУСК БОТА ==========
 if __name__ == "__main__":
-    # Загружаем настройки из БД при запуске
-    load_settings_from_db()
+    # Синхронизируем конфигурацию перед запуском
+    sync_config_from_db()
     
     print("=" * 60)
     print("🤖 BRAWL AKIM GMP BOT v3.0")
@@ -2405,6 +2430,7 @@ if __name__ == "__main__":
     print("=" * 60)
     print("🔄 Бот запущен и готов к работе!")
     print("=" * 60)
+    
     try:
         bot.polling(none_stop=True, interval=0, timeout=60)
     except Exception as e:
