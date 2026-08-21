@@ -173,28 +173,22 @@ class Database:
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
 
-        # Проверяем и добавляем колонки в users
         cur.execute("PRAGMA table_info(users)")
         columns = [col[1] for col in cur.fetchall()]
 
         if 'total_withdrawn' not in columns:
             cur.execute("ALTER TABLE users ADD COLUMN total_withdrawn REAL DEFAULT 0")
-            logger.info("Добавлена колонка total_withdrawn в users")
         if 'referral_earnings' not in columns:
             cur.execute("ALTER TABLE users ADD COLUMN referral_earnings REAL DEFAULT 0")
-            logger.info("Добавлена колонка referral_earnings в users")
         if 'last_case_open' not in columns:
             cur.execute("ALTER TABLE users ADD COLUMN last_case_open TIMESTAMP DEFAULT NULL")
-            logger.info("Добавлена колонка last_case_open в users")
 
-        # Проверяем колонки в banned_users
         cur.execute("PRAGMA table_info(banned_users)")
         columns = [col[1] for col in cur.fetchall()]
         if 'banned_by' not in columns:
             cur.execute("ALTER TABLE banned_users ADD COLUMN banned_by INTEGER DEFAULT NULL")
-            logger.info("Добавлена колонка banned_by в banned_users")
 
-        # Проверяем наличие всех настроек в settings
+        # Проверяем наличие всех настроек
         cur.execute("SELECT key FROM settings")
         existing_keys = [row[0] for row in cur.fetchall()]
 
@@ -218,14 +212,12 @@ class Database:
         for key, value in all_settings.items():
             if key not in existing_keys:
                 cur.execute('INSERT INTO settings (key, value) VALUES (?, ?)', (key, value))
-                logger.info(f"Добавлена настройка {key} = {value}")
 
         conn.commit()
         conn.close()
         logger.info("Миграция базы данных завершена")
 
     def init_settings(self):
-        """Инициализация настроек (вызывается только при создании новой БД)"""
         defaults = {
             'PRICE_PER_GMP_RUB': str(Config.PRICE_PER_GMP_RUB),
             'MIN_RUB_AMOUNT': str(Config.MIN_RUB_AMOUNT),
@@ -263,7 +255,6 @@ class Database:
         try:
             return float(val) if val is not None else 0.0
         except ValueError:
-            logger.error(f"Ошибка преобразования {key} = {val} в float")
             return 0.0
 
     def get_setting_int(self, key):
@@ -271,7 +262,6 @@ class Database:
         try:
             return int(val) if val is not None else 0
         except ValueError:
-            logger.error(f"Ошибка преобразования {key} = {val} в int")
             return 0
 
     def set_setting(self, key, value):
@@ -280,28 +270,52 @@ class Database:
         cur.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', (key, str(value)))
         conn.commit()
         conn.close()
-        logger.info(f"Настройка {key} изменена на {value}")
 
-    def get_all_settings(self):
-        """Возвращает все настройки в виде словаря для экспорта"""
+    # ---------- МЕТОДЫ ДЛЯ ЭКСПОРТА/ИМПОРТА ----------
+    def export_all_to_dict(self):
+        """Экспортирует все данные из БД в словарь для JSON"""
+        data = {}
         conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-        cur.execute('SELECT key, value FROM settings')
-        rows = cur.fetchall()
+
+        tables = ['users', 'orders', 'bonus_balance', 'bonus_history', 'banned_users', 'referrals', 'withdraw_requests', 'settings']
+        for table in tables:
+            cur.execute(f'SELECT * FROM {table}')
+            rows = cur.fetchall()
+            data[table] = [dict(row) for row in rows]
+
         conn.close()
-        return {row[0]: row[1] for row in rows}
+        return data
 
-    def import_settings(self, settings_dict):
-        """Импортирует настройки из словаря (обновляет существующие, добавляет новые)"""
+    def import_from_dict(self, data):
+        """Импортирует данные из словаря в БД (очищает таблицы перед вставкой)"""
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
-        for key, value in settings_dict.items():
-            cur.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', (key, str(value)))
+
+        # Отключаем внешние ключи для упрощения
+        cur.execute('PRAGMA foreign_keys = OFF')
+
+        tables = ['users', 'orders', 'bonus_balance', 'bonus_history', 'banned_users', 'referrals', 'withdraw_requests', 'settings']
+        for table in tables:
+            # Очищаем таблицу
+            cur.execute(f'DELETE FROM {table}')
+            # Вставляем новые данные
+            rows = data.get(table, [])
+            if rows:
+                columns = rows[0].keys()
+                placeholders = ','.join(['?' for _ in columns])
+                cols_str = ','.join(columns)
+                for row in rows:
+                    values = [row[col] for col in columns]
+                    cur.execute(f'INSERT INTO {table} ({cols_str}) VALUES ({placeholders})', values)
+
+        cur.execute('PRAGMA foreign_keys = ON')
         conn.commit()
         conn.close()
-        logger.info("Настройки импортированы из словаря")
+        logger.info("Импорт данных выполнен успешно")
 
-    # ========== МЕТОДЫ ДЛЯ ПОЛЬЗОВАТЕЛЕЙ ==========
+    # ---------- ОСТАЛЬНЫЕ МЕТОДЫ ----------
     def get_user(self, user_id):
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
@@ -369,7 +383,6 @@ class Database:
                     (user_id, reason, banned_by))
         conn.commit()
         conn.close()
-        logger.info(f"Пользователь {user_id} забанен администратором {banned_by}")
 
     def unban_user(self, user_id):
         conn = sqlite3.connect(self.db_path)
@@ -377,9 +390,8 @@ class Database:
         cur.execute('DELETE FROM banned_users WHERE user_id = ?', (user_id,))
         conn.commit()
         conn.close()
-        logger.info(f"Пользователь {user_id} разбанен")
 
-    # ========== РЕФЕРАЛЫ ==========
+    # ---------- РЕФЕРАЛЫ ----------
     def add_referral(self, referrer_id, referred_id):
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
@@ -410,7 +422,7 @@ class Database:
         conn.commit()
         conn.close()
 
-    # ========== БОНУСНЫЙ БАЛАНС ==========
+    # ---------- БОНУСНЫЙ БАЛАНС ----------
     def get_bonus_balance(self, user_id):
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
@@ -428,7 +440,6 @@ class Database:
                     (user_id, amount, 'bonus', description or 'Пополнение бонусного баланса'))
         conn.commit()
         conn.close()
-        logger.info(f"Бонусный баланс {user_id} изменен на {amount}")
 
     def get_bonus_history(self, user_id, limit=10):
         conn = sqlite3.connect(self.db_path)
@@ -454,7 +465,7 @@ class Database:
         conn.commit()
         conn.close()
 
-    # ========== ЗАКАЗЫ ==========
+    # ---------- ЗАКАЗЫ ----------
     def create_order(self, user_id, order_type, amount, gmp_amount):
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
@@ -531,7 +542,7 @@ class Database:
         conn.close()
         return orders
 
-    # ========== ВЫВОД ==========
+    # ---------- ВЫВОД ----------
     def create_withdraw_request(self, user_id, amount, recipient):
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
@@ -629,17 +640,14 @@ def sync_config_from_db():
         Config.MIN_CASE_REWARD = db.get_setting_int('MIN_CASE_REWARD')
         Config.MAX_CASE_REWARD = db.get_setting_int('MAX_CASE_REWARD')
         Config.TOTAL_GMP_AVAILABLE = db.get_setting_float('TOTAL_GMP_AVAILABLE')
-        
         Config.CARD_NUMBER = db.get_setting('CARD_NUMBER') or Config.CARD_NUMBER
         Config.PHONE_NUMBER = db.get_setting('PHONE_NUMBER') or Config.PHONE_NUMBER
         Config.BANK_NAME = db.get_setting('BANK_NAME') or Config.BANK_NAME
         Config.RECIPIENT_NAME = db.get_setting('RECIPIENT_NAME') or Config.RECIPIENT_NAME
-        
-        logger.info("Конфигурация синхронизирована с базой данных")
-        logger.info(f"Текущие настройки: PRICE={Config.PRICE_PER_GMP_RUB}, AVAILABLE={Config.TOTAL_GMP_AVAILABLE}")
+        logger.info("Конфигурация синхронизирована с БД")
         return True
     except Exception as e:
-        logger.error(f"Ошибка синхронизации конфигурации: {e}")
+        logger.error(f"Ошибка синхронизации: {e}")
         return False
 
 def get_bot_id():
@@ -774,15 +782,13 @@ def admin_panel_keyboard():
     btn6 = types.InlineKeyboardButton("💱 Настройки", callback_data="admin_settings")
     btn7 = types.InlineKeyboardButton("➕ Добавить GMP", callback_data="admin_add_gmp")
     btn8 = types.InlineKeyboardButton("💳 Реквизиты карты", callback_data="admin_card_details")
-    btn9 = types.InlineKeyboardButton("📦 Экспорт настроек", callback_data="admin_export_settings")
-    btn10 = types.InlineKeyboardButton("📥 Импорт настроек", callback_data="admin_import_settings")
-    btn11 = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_main")
+    btn9 = types.InlineKeyboardButton("💾 Сохранение", callback_data="admin_backup")
+    btn10 = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_main")
     keyboard.add(btn1, btn2)
     keyboard.add(btn3, btn4)
     keyboard.add(btn5, btn6)
     keyboard.add(btn7, btn8)
     keyboard.add(btn9, btn10)
-    keyboard.add(btn11)
     return keyboard
 
 def payment_methods_keyboard():
@@ -910,6 +916,14 @@ def admin_bans_keyboard():
     keyboard.add(btn3, btn4)
     return keyboard
 
+def backup_keyboard():
+    keyboard = types.InlineKeyboardMarkup(row_width=1)
+    btn1 = types.InlineKeyboardButton("📤 Экспорт (скачать JSON)", callback_data="admin_export")
+    btn2 = types.InlineKeyboardButton("📥 Импорт (загрузить JSON)", callback_data="admin_import")
+    btn3 = types.InlineKeyboardButton("↩️ Назад", callback_data="admin_panel")
+    keyboard.add(btn1, btn2, btn3)
+    return keyboard
+
 # ========== ФУНКЦИЯ ПОКАЗА ГЛАВНОГО МЕНЮ ==========
 def show_main_menu(chat_id, message_id=None):
     user_id = chat_id
@@ -997,7 +1011,61 @@ def start_command(message):
     except Exception as e:
         logger.error(f"Ошибка установки команд: {e}")
 
-# ========== КОЛБЭКИ ==========
+# ---------- КОМАНДЫ ЭКСПОРТА/ИМПОРТА ----------
+@bot.message_handler(commands=['export'])
+def export_command(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "⛔ У вас нет прав!")
+        return
+    try:
+        data = db.export_all_to_dict()
+        json_str = json.dumps(data, indent=2, ensure_ascii=False, default=str)
+        filename = f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write(json_str)
+        with open(filename, 'rb') as f:
+            bot.send_document(message.chat.id, f, caption="📤 Файл сохранения бота")
+        os.remove(filename)
+        logger.info("Экспорт выполнен успешно")
+    except Exception as e:
+        logger.error(f"Ошибка экспорта: {e}")
+        bot.reply_to(message, f"❌ Ошибка экспорта: {e}")
+
+@bot.message_handler(commands=['import'])
+def import_command(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "⛔ У вас нет прав!")
+        return
+    bot.reply_to(message, "📥 Отправьте JSON-файл с сохранением.")
+
+@bot.message_handler(content_types=['document'])
+def handle_import_doc(message):
+    if not is_admin(message.from_user.id):
+        return
+    if not message.document:
+        return
+    if not message.document.file_name.endswith('.json'):
+        bot.reply_to(message, "❌ Отправьте файл в формате .json")
+        return
+    try:
+        file_info = bot.get_file(message.document.file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        json_str = downloaded_file.decode('utf-8')
+        data = json.loads(json_str)
+        # Проверяем структуру
+        required_tables = ['users', 'orders', 'bonus_balance', 'bonus_history', 'banned_users', 'referrals', 'withdraw_requests', 'settings']
+        if not all(table in data for table in required_tables):
+            bot.reply_to(message, "❌ Неверный формат файла!")
+            return
+        db.import_from_dict(data)
+        sync_config_from_db()
+        bot.reply_to(message, "✅ Данные успешно импортированы!")
+        logger.info("Импорт выполнен успешно")
+    except Exception as e:
+        logger.error(f"Ошибка импорта: {e}")
+        bot.reply_to(message, f"❌ Ошибка импорта: {e}")
+
+# ---------- ОБРАБОТЧИКИ КОЛБЭКОВ ----------
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     user_id = call.from_user.id
@@ -1387,52 +1455,51 @@ def callback_handler(call):
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=admin_panel_keyboard())
         return
 
-    # ====== АДМИН: ЭКСПОРТ НАСТРОЕК ======
-    if call.data == "admin_export_settings":
+    # ====== АДМИН: БЭКАП ======
+    if call.data == "admin_backup":
         if not is_admin(user_id):
             bot.answer_callback_query(call.id, "⛔ У вас нет прав!", show_alert=True)
             return
-        settings = db.get_all_settings()
-        # Преобразуем значения для красивого вывода
-        export_data = {}
-        for key, value in settings.items():
-            # Пытаемся преобразовать в число, если возможно, иначе оставляем строку
-            try:
-                if '.' in value:
-                    export_data[key] = float(value)
-                else:
-                    export_data[key] = int(value)
-            except ValueError:
-                export_data[key] = value
-        json_str = json.dumps(export_data, indent=2, ensure_ascii=False)
-        # Отправляем файл
+        text = "💾 <b>Сохранение данных</b>\n\n"
+        text += "Выберите действие:\n"
+        text += "📤 Экспорт – скачать файл со всеми данными\n"
+        text += "📥 Импорт – загрузить файл для восстановления"
         try:
-            bot.send_document(chat_id, ('settings.json', json_str.encode('utf-8')), caption="📦 Экспорт настроек выполнен.")
-            bot.answer_callback_query(call.id, "✅ Файл отправлен!")
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML", reply_markup=backup_keyboard())
         except Exception as e:
-            logger.error(f"Ошибка экспорта: {e}")
-            bot.answer_callback_query(call.id, "❌ Ошибка экспорта", show_alert=True)
+            if "message is not modified" not in str(e):
+                logger.error(f"Ошибка admin_backup: {e}")
+            bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=backup_keyboard())
         return
 
-    # ====== АДМИН: ИМПОРТ НАСТРОЕК ======
-    if call.data == "admin_import_settings":
+    # ====== АДМИН: ЭКСПОРТ ======
+    if call.data == "admin_export":
         if not is_admin(user_id):
             bot.answer_callback_query(call.id, "⛔ У вас нет прав!", show_alert=True)
             return
-        msg = bot.send_message(
-            chat_id,
-            "📥 <b>Импорт настроек</b>\n\n"
-            "Отправьте JSON-файл с настройками (формат как в экспорте).\n"
-            "Файл должен иметь расширение .json",
-            parse_mode="HTML",
-            reply_markup=back_to_main_keyboard()
-        )
+        bot.answer_callback_query(call.id, "⏳ Создаю файл...")
         try:
-            bot.edit_message_text("⏳ Ожидайте отправки файла...", chat_id, message_id)
-        except:
-            pass
-        bot.register_next_step_handler(msg, handle_import_settings_file)
+            data = db.export_all_to_dict()
+            json_str = json.dumps(data, indent=2, ensure_ascii=False, default=str)
+            filename = f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write(json_str)
+            with open(filename, 'rb') as f:
+                bot.send_document(chat_id, f, caption="📤 Файл сохранения бота")
+            os.remove(filename)
+            logger.info("Экспорт выполнен успешно")
+        except Exception as e:
+            logger.error(f"Ошибка экспорта: {e}")
+            bot.send_message(chat_id, f"❌ Ошибка экспорта: {e}")
         return
+
+    # ====== АДМИН: ИМПОРТ ======
+    if call.data == "admin_import":
+        if not is_admin(user_id):
+            bot.answer_callback_query(call.id, "⛔ У вас нет прав!", show_alert=True)
+            return
+        bot.answer_callback_query(call.id, "📥 Отправьте JSON-файл.")
+        bot.send_message(chat_id, "📥 Отправьте JSON-файл с сохранением.\n(команда /import тоже работает)")
 
     # ====== АДМИН: РЕКВИЗИТЫ КАРТЫ ======
     if call.data == "admin_card_details":
@@ -1479,7 +1546,6 @@ def callback_handler(call):
         min_case = Config.MIN_CASE_REWARD
         max_case = Config.MAX_CASE_REWARD
         available = Config.TOTAL_GMP_AVAILABLE
-
         text = (
             "💱 <b>Настройки бота</b>\n\n"
             f"Текущие значения:\n"
@@ -1628,12 +1694,13 @@ def callback_handler(call):
         bot.register_next_step_handler(call.message, handle_rubles_screenshot, order_id)
         return
 
-    # ====== АДМИН: ЗАЯВКИ (исправленный блок) ======
-    if call.data.startswith("admin_order_view_") or call.data == "admin_orders" or call.data.startswith("admin_order_screenshot_"):
+    # ========== АДМИН: ЗАЯВКИ (исправленная логика) ==========
+    if call.data == "admin_orders" or call.data.startswith("admin_order_view_") or call.data.startswith("admin_order_screenshot_"):
         if not is_admin(user_id):
             bot.answer_callback_query(call.id, "⛔ У вас нет прав!", show_alert=True)
             return
 
+        # Список заявок
         if call.data == "admin_orders":
             pending_orders = db.get_pending_orders()
             if not pending_orders:
@@ -1664,6 +1731,7 @@ def callback_handler(call):
                     bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=keyboard)
                 return
 
+        # Просмотр конкретной заявки
         if call.data.startswith("admin_order_view_"):
             order_id = int(call.data.split("_")[3])
             order = db.get_order(order_id)
@@ -1682,7 +1750,6 @@ def callback_handler(call):
                 f"📌 Статус: {order['status']}"
             )
             keyboard = types.InlineKeyboardMarkup(row_width=2)
-            # Кнопки действий (выполнить/отклонить)
             btn_confirm = types.InlineKeyboardButton("✅ Выполнить", callback_data=f"admin_confirm_{order_id}")
             btn_cancel = types.InlineKeyboardButton("❌ Отклонить", callback_data=f"admin_cancel_{order_id}")
             btn_screenshot = types.InlineKeyboardButton("🖼 Скрин", callback_data=f"admin_order_screenshot_{order_id}")
@@ -1698,6 +1765,7 @@ def callback_handler(call):
                 bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=keyboard)
             return
 
+        # Просмотр скриншота
         if call.data.startswith("admin_order_screenshot_"):
             order_id = int(call.data.split("_")[3])
             order = db.get_order(order_id)
@@ -1716,7 +1784,7 @@ def callback_handler(call):
                 bot.answer_callback_query(call.id, "❌ Ошибка при отправке скрина", show_alert=True)
             return
 
-    # ====== АДМИН: ЗАЯВКИ НА ВЫВОД ======
+    # ========== АДМИН: ЗАЯВКИ НА ВЫВОД ==========
     if call.data == "admin_withdraws":
         if not is_admin(user_id):
             bot.answer_callback_query(call.id, "⛔ У вас нет прав!", show_alert=True)
@@ -1741,7 +1809,7 @@ def callback_handler(call):
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=keyboard)
         return
 
-    # ====== АДМИН: СТАТИСТИКА ======
+    # ========== АДМИН: СТАТИСТИКА ==========
     if call.data == "admin_stats":
         if not is_admin(user_id):
             bot.answer_callback_query(call.id, "⛔ У вас нет прав!", show_alert=True)
@@ -1789,7 +1857,7 @@ def callback_handler(call):
             bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=admin_stats_keyboard())
         return
 
-    # ====== АДМИН: РАССЫЛКА ======
+    # ========== АДМИН: РАССЫЛКА ==========
     if call.data == "admin_broadcast":
         if not is_admin(user_id):
             bot.answer_callback_query(call.id, "⛔ У вас нет прав!", show_alert=True)
@@ -1808,35 +1876,29 @@ def callback_handler(call):
         bot.register_next_step_handler(call.message, handle_broadcast)
         return
 
-    # ====== АДМИН: ПОДТВЕРЖДЕНИЕ ПОПОЛНЕНИЯ ======
+    # ========== АДМИН: ПОДТВЕРЖДЕНИЕ ПОПОЛНЕНИЯ ==========
     if call.data.startswith("admin_confirm_"):
         order_id = int(call.data.split("_")[2])
         order = db.get_order(order_id)
         if not order:
             bot.answer_callback_query(call.id, "❌ Заявка не найдена")
             return
-        # Проверяем наличие GMP на складе
         if Config.TOTAL_GMP_AVAILABLE < order['gmp_amount']:
             bot.answer_callback_query(call.id, f"❌ Недостаточно GMP на складе! Доступно: {Config.TOTAL_GMP_AVAILABLE:.0f}", show_alert=True)
             return
         user_id_order = order['user_id']
         user = db.get_user(user_id_order)
         username = f"@{user['username']}" if user and user['username'] else f"ID: {user_id_order}"
-        
         db.update_order_status(order_id, "confirmed")
-        
         conn = sqlite3.connect(Config.DB_PATH)
         cur = conn.cursor()
         cur.execute('UPDATE users SET orders_count = orders_count + 1 WHERE user_id = ?', (user_id_order,))
         conn.commit()
         conn.close()
-        
-        # Списываем GMP со склада и синхронизируем
         new_available = Config.TOTAL_GMP_AVAILABLE - order['gmp_amount']
         db.set_setting('TOTAL_GMP_AVAILABLE', new_available)
         sync_config_from_db()
-        
-        # Начисляем реферальный бонус
+        # реферальный бонус
         if user and user['referrer_id']:
             referrer_id = user['referrer_id']
             referral_percent = Config.REFERRAL_PERCENT
@@ -1853,14 +1915,12 @@ def callback_handler(call):
                     )
                 except:
                     pass
-        
         admin_msg_id = order['admin_message_id'] if order['admin_message_id'] else None
         if admin_msg_id:
             safe_delete_message(Config.ADMIN_ID, admin_msg_id)
         user_msg_id = order['user_message_id'] if order['user_message_id'] else None
         if user_msg_id:
             safe_delete_message(user_id_order, user_msg_id)
-        
         try:
             if not is_bot_itself(user_id_order):
                 text = (
@@ -1871,40 +1931,19 @@ def callback_handler(call):
                 bot.send_message(user_id_order, text, parse_mode="HTML")
         except Exception as e:
             logger.error(f"Не удалось уведомить пользователя {user_id_order}: {e}")
-        
         bot.answer_callback_query(call.id, "✅ Заявка подтверждена!")
-        # Возвращаемся к списку заявок (обновляем сообщение)
-        pending_orders = db.get_pending_orders()
-        if not pending_orders:
-            text = "📋 <b>Новых заявок на пополнение нет</b>\n\nВсе заявки обработаны ✅"
-            safe_edit_or_send(
-                chat_id,
-                message_id,
-                text,
-                parse_mode="HTML",
-                reply_markup=admin_orders_keyboard()
-            )
-        else:
-            text = f"📋 <b>Заявки на пополнение ({len(pending_orders)})</b>\n\n"
-            keyboard = types.InlineKeyboardMarkup(row_width=2)
-            for o in pending_orders:
-                user_name = o['username'] or o['first_name'] or f"ID: {o['user_id']}"
-                gmp_floor = floor_gmp(o['gmp_amount'])
-                btn_text = f"#{o['id']} {user_name} - {gmp_floor} (перевод)"
-                btn = types.InlineKeyboardButton(btn_text, callback_data=f"admin_order_view_{o['id']}")
-                keyboard.add(btn)
-            btn_back = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_main")
-            keyboard.add(btn_back)
-            safe_edit_or_send(
-                chat_id,
-                message_id,
-                text,
-                parse_mode="HTML",
-                reply_markup=keyboard
-            )
+        safe_edit_or_send(
+            call.message.chat.id,
+            call.message.message_id,
+            f"✅ <b>Заявка #{order_id} выполнена</b>\n{divider()}\n"
+            f"💎 Продано: <b>{order['gmp_amount']:.0f} GMP</b>\n"
+            f"👤 Покупатель: {username}",
+            parse_mode="HTML",
+            reply_markup=back_to_main_keyboard()
+        )
         return
 
-    # ====== АДМИН: ОТМЕНА ЗАЯВКИ ======
+    # ========== АДМИН: ОТМЕНА ЗАЯВКИ ==========
     if call.data.startswith("admin_cancel_"):
         order_id = int(call.data.split("_")[2])
         order = db.get_order(order_id)
@@ -1932,38 +1971,16 @@ def callback_handler(call):
         except Exception as e:
             logger.error(f"Не удалось уведомить пользователя {order['user_id']}: {e}")
         bot.answer_callback_query(call.id, "❌ Заявка отклонена!")
-        # Возвращаемся к списку заявок (обновляем сообщение)
-        pending_orders = db.get_pending_orders()
-        if not pending_orders:
-            text = "📋 <b>Новых заявок на пополнение нет</b>\n\nВсе заявки обработаны ✅"
-            safe_edit_or_send(
-                chat_id,
-                message_id,
-                text,
-                parse_mode="HTML",
-                reply_markup=admin_orders_keyboard()
-            )
-        else:
-            text = f"📋 <b>Заявки на пополнение ({len(pending_orders)})</b>\n\n"
-            keyboard = types.InlineKeyboardMarkup(row_width=2)
-            for o in pending_orders:
-                user_name = o['username'] or o['first_name'] or f"ID: {o['user_id']}"
-                gmp_floor = floor_gmp(o['gmp_amount'])
-                btn_text = f"#{o['id']} {user_name} - {gmp_floor} (перевод)"
-                btn = types.InlineKeyboardButton(btn_text, callback_data=f"admin_order_view_{o['id']}")
-                keyboard.add(btn)
-            btn_back = types.InlineKeyboardButton("↩️ Назад", callback_data="back_to_main")
-            keyboard.add(btn_back)
-            safe_edit_or_send(
-                chat_id,
-                message_id,
-                text,
-                parse_mode="HTML",
-                reply_markup=keyboard
-            )
+        safe_edit_or_send(
+            call.message.chat.id,
+            call.message.message_id,
+            f"❌ <b>Заявка #{order_id} отклонена</b>",
+            parse_mode="HTML",
+            reply_markup=back_to_main_keyboard()
+        )
         return
 
-    # ====== АДМИН: ВЫВОД СРЕДСТВ ======
+    # ========== АДМИН: ВЫВОД СРЕДСТВ ==========
     if call.data.startswith("admin_withdraw_approve_"):
         request_id = int(call.data.split("_")[3])
         request = db.get_withdraw_request(request_id)
@@ -2031,37 +2048,6 @@ def callback_handler(call):
 
 
 # ========== ОБРАБОТЧИКИ ВВОДА ==========
-
-# ----- АДМИН: ИМПОРТ НАСТРОЕК (обработка файла) -----
-def handle_import_settings_file(message):
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-    if not is_admin(user_id):
-        return
-    if not message.document:
-        bot.send_message(chat_id, "❌ Пожалуйста, отправьте файл в формате JSON.", parse_mode="HTML")
-        return
-    if not message.document.file_name.endswith('.json'):
-        bot.send_message(chat_id, "❌ Файл должен иметь расширение .json", parse_mode="HTML")
-        return
-    try:
-        file_info = bot.get_file(message.document.file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
-        data = json.loads(downloaded_file.decode('utf-8'))
-        # Проверяем, что это словарь
-        if not isinstance(data, dict):
-            bot.send_message(chat_id, "❌ Неверный формат: ожидается JSON-объект.", parse_mode="HTML")
-            return
-        # Импортируем настройки
-        db.import_settings(data)
-        sync_config_from_db()
-        bot.send_message(chat_id, "✅ Настройки успешно импортированы и применены!", parse_mode="HTML")
-        show_main_menu(chat_id)
-    except json.JSONDecodeError:
-        bot.send_message(chat_id, "❌ Ошибка: неверный JSON-файл.", parse_mode="HTML")
-    except Exception as e:
-        logger.error(f"Ошибка импорта настроек: {e}")
-        bot.send_message(chat_id, f"❌ Ошибка импорта: {e}", parse_mode="HTML")
 
 # ----- АДМИН: ИЗМЕНЕНИЕ РЕКВИЗИТОВ КАРТЫ -----
 def handle_admin_card_choice(message):
